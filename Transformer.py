@@ -1,22 +1,31 @@
 from torch import nn
 import torch
 import copy
-
+from transformers import CLIPModel, CLIPTokenizer
+import math
 class Transformer(nn.Module):
-    def __init__(self, d_model, text_encoder, image_encoder, decoder, tgt_vocab_size):
+    def __init__(self, d_model, text_encoder, image_encoder, decoder, tgt_vocab_size, dropout=0.1):
         super(Transformer, self).__init__()
-
+        self.clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
         self.text_encoder = text_encoder
         self.image_encoder = image_encoder
         self.decoder = decoder
+        self.text_embedding = nn.Embedding(tgt_vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, dropout)
 
         self.fc = nn.Linear(d_model, tgt_vocab_size)
 
     def forward(self, image, caption):
         # text_encoder_output = self.text_encoder.forward(caption)
-        image_encoder_output = self.image_encoder.forward(image)
-        dec_output = self.decoder.forward(caption, image_encoder_output.last_hidden_state)
-        output = self.fc(dec_output)
+        image_encoder_output = self.clip.get_image_features(image)
+        # print(image_encoder_output.shape, "image_encoder_output.shape")
+        text_embeddings = self.text_embedding(caption)
+        
+        sequence = torch.cat((image_encoder_output.unsqueeze(1), text_embeddings), dim=1)
+        sequence = self.positional_encoding(sequence)
+        dec_output = self.decoder.forward(sequence)
+        output = self.fc(dec_output[:,1:])
         return output
 
 def clones(module, N):
@@ -43,8 +52,8 @@ class DecoderLayer(nn.Module):
         embedding = x
         attn, prob = self.self_attn_layer.forward(embedding, embedding, embedding, mask)
         x = self.norm1(attn + embedding)
-        attn, prob = self.cross_attn_layer.forward(query_input=x, key_input=encoder_output, value_input=encoder_output, mask=None)
-        x = self.norm2(x + attn)
+        # attn, prob = self.cross_attn_layer.forward(query_input=x, key_input=encoder_output, value_input=encoder_output, mask=None)
+        # x = self.norm2(x + attn)
         ff_output = self.FF_layer(x)
         x = self.norm3(x + ff_output)
         return x
@@ -60,12 +69,13 @@ class Decoder(nn.Module):
         # self.projectbacktovocab = torch.nn.Linear(512, tgt_vocab_size)
 
 
-     def forward(self, x, encoder_output):
-        mask = self.generate_padding_mask(x)
+     def forward(self, sequence):
+        mask = self.generate_padding_mask(sequence)
         # mask = True
-        x = self.embedding_layer.forward(x).squeeze(1)
+        # x = self.embedding_layer.forward(sequence).squeeze(1)
+        x = sequence
         for layer in self.layers:
-            x = layer(x, encoder_output, mask)
+            x = layer(sequence, None, mask)
         # x = self.projectbacktovocab(x)
         x = self.norm1(x)
         return x
@@ -96,3 +106,18 @@ class Decoder(nn.Module):
         return final_mask
      
    
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)

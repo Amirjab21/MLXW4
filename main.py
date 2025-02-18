@@ -92,7 +92,7 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 32 if torch.cuda.is_available() else 1
+batch_size = 32 if torch.cuda.is_available() else 2
 # print(batch_size, "batch_size")
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
