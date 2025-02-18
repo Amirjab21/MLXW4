@@ -5,7 +5,7 @@ from PIL import Image, ImageOps
 import transformers
 from dataset import Flickr30kDataset
 from Transformer import Transformer, Decoder, DecoderLayer
-from Attention import Attention_Layer, Cross_Attention_Layer
+from Attention import Attention_Layer, Cross_Attention_Layer, MultiHeadAttention
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import tqdm
@@ -20,7 +20,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device, "device")
 
 dataset = load_dataset("nlphuji/flickr30k")
-sample_size = 15000 if torch.cuda.is_available() else 100
+sample_size = 15000 if torch.cuda.is_available() else 10
 dataset = dataset['test'].select(range(sample_size))
 
 def make_square(image):
@@ -58,20 +58,22 @@ dataset = Flickr30kDataset(transformed_images, tokenizer)
 d_model = 512
 text_dimension_embedding = 512
 image_encoder_output_dim = 768
+n_loops = 6
 
-self_attn_layer = Attention_Layer(d_model=d_model, num_heads=1)
-cross_attn_layer = Cross_Attention_Layer(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=1)
+# self_attn_layer = Attention_Layer(d_model=d_model, num_heads=1)
+self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=8)
+cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=8)
 
 feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048, d_model))
 
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
 
-decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size, intermediate_attn_dim=d_model, n_loops=6, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
+decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
 
 
 
-decoder = Decoder(vocab_size, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=6)
+decoder = Decoder(vocab_size, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
 
 
 transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size)
@@ -90,7 +92,7 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 32 if torch.cuda.is_available() else 2
+batch_size = 32 if torch.cuda.is_available() else 1
 # print(batch_size, "batch_size")
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
@@ -115,7 +117,7 @@ def train():
             
             batch_loss = 0
             image, caption = batch['image'].to(device), batch['caption'].to(device)
-            # print( "first", caption.shape)
+            # print(caption[0], 'caption.shape')
             
             optimizer.zero_grad()
             captionwithoutend = caption[:, :-1]
@@ -124,8 +126,7 @@ def train():
 
 
             # Apply softmax across the vocabulary dimension (dim=2)
-            # output_probabilities = torch.softmax(output, dim=2)
-            # predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, 4]
+
             # print(predicted_digits[0], "predicted digits")
             true_indices = caption[:, 1:]
             # true_indices = torch.argmax(caption[:,:, 1:], dim=1)  # Skip first position (START token)
@@ -138,9 +139,15 @@ def train():
             # predicted_digits = [[reverse_vocab[idx.item()] for idx in pred] for pred in predicted_digits.squeeze(1)]
             # true_digits = [[reverse_vocab[idx.item()] for idx in true] for true in true_indices.squeeze(1)]
             
-            # if batch_idx % 100 == 0:  # Print every 100 batches
-            #     for j in range(min(3, len(predicted_digits))):  # Show first 3 examples
-            #         print(f"Predicted: {predicted_digits[j]} | True: {true_digits[j]}")
+            if batch_idx % 5 == 0:  # Print every 5 batches
+                output_probabilities = torch.softmax(output, dim=2)
+                predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, seq_length, 1
+                # true_indices = torch.argmax(caption[:, 1:], dim=1)  # Skip first position (START token)
+                for j in range(min(1, len(predicted_digits))):  # Show first 3 examples
+                    # print(f"Predicted: {predicted_digits[j]} | True: {true_indices[j]}")
+                    pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[j][:6]]
+                    true_words = [reverse_vocab[idx.item()] for idx in true_indices[j][:6]]
+                    print(f"Predicted: {pred_words} | True: {true_words}")
             
             # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
             # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
