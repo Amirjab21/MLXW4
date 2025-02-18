@@ -12,16 +12,21 @@ import tqdm
 import torch
 import wandb
 from datetime import datetime
+torch.cuda.empty_cache()
+
 # device = torch.device("cpu")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(device, "device")
 
 dataset = load_dataset("nlphuji/flickr30k")
-dataset = dataset['test'].select(range(1000))
+sample_size = 15000 if torch.cuda.is_available() else 100
+dataset = dataset['test'].select(range(sample_size))
 
 def make_square(image):
     size = max(image.size)
     new_image = ImageOps.pad(image, (size, size), color='white')
-    new_image = new_image.resize((256, 256))
+    new_image = new_image.resize((224, 224))
 
     return new_image
 
@@ -85,13 +90,14 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 24
+batch_size = 32 if torch.cuda.is_available() else 2
+# print(batch_size, "batch_size")
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
-epochs = 3
+epochs = 10
 criterion = nn.CrossEntropyLoss()
 
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4 if torch.cuda.is_available() else 0, pin_memory=True)
 
 transformer.to(device)
 
@@ -109,11 +115,11 @@ def train():
             
             batch_loss = 0
             image, caption = batch['image'].to(device), batch['caption'].to(device)
-            # print(image[0], caption[0].shape, "first", caption.shape)
+            # print( "first", caption.shape)
             
             optimizer.zero_grad()
-            captionwithoutend = caption[:,:, :-1]
-            print(captionwithoutend.shape ,"captionwithoutend shape")
+            captionwithoutend = caption[:, :-1]
+            # print(captionwithoutend.shape ,"captionwithoutend shape")
             output = transformer.forward(image, captionwithoutend)
 
 
@@ -121,7 +127,7 @@ def train():
             # output_probabilities = torch.softmax(output, dim=2)
             # predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, 4]
             # print(predicted_digits[0], "predicted digits")
-            true_indices = caption[:,:, 1:]
+            true_indices = caption[:, 1:]
             # true_indices = torch.argmax(caption[:,:, 1:], dim=1)  # Skip first position (START token)
             # print(true_indices.shape, "true indices")
             # print(predicted_digits.shape, "predicted digits")
@@ -136,25 +142,31 @@ def train():
             #     for j in range(min(3, len(predicted_digits))):  # Show first 3 examples
             #         print(f"Predicted: {predicted_digits[j]} | True: {true_digits[j]}")
             
-            
-            print(output.shape, "output.shape")
-            print(true_indices.shape, "true_indices.shape")
+            # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
+            # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
+            # print(output.shape, "output.shape")
+            # print(true_indices.shape, "true_indices.shape")
             # for i in range(5):  # For the 4 digits
             #     batch_loss += criterion(output[:, i, :], true_indices[:, i])
             # batch_loss = criterion(output.view(-1, output.size(-1)), true_indices.squeeze(1).view(-1)) #ALTERNATIVE LOSS FUNCTION
-
+            # print(output[0][2])
             output = output.reshape(-1, output.size(-1))  # Changed view to reshape
-            true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
+            true_indices = true_indices.reshape(-1).long()  # Changed view to reshape and removed squeeze
 
+            # print(f"After reshape:")
+            # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
+            # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
+            
             batch_loss = criterion(output, true_indices)
-
+            # batch_loss = torch.tensor(100.0, device=device, requires_grad=True)
+            # batch_loss = 100
             wandb.log({"batch_loss": batch_loss.item() })
             progress_bar.set_postfix({"batch_loss": batch_loss.item() })
 
             epoch_loss += batch_loss.item()
             total_loss += batch_loss.item()
             batch_loss.backward()
-            optimizer.step()
+            # optimizer.step()
         wandb.log({"epoch_loss": epoch_loss / len(dataloader.dataset)})
         wandb.log({"total_loss": total_loss / (epoch + 1)})
         # validate(transformer,100)

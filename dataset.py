@@ -13,7 +13,6 @@ def split_image_to_patches(image, image_height, image_width, patch_size, channel
     blocks = []
     num_patches = image_height // patch_size
     image = np.array(image)  # This will give you a (3, 224, 224) numpy array
-    print(image.shape)
     for c in range(channels):
         for i in range(num_patches):
             for j in range(num_patches):
@@ -48,11 +47,12 @@ class Flickr30kDataset(torch.utils.data.Dataset):
         random_caption_idx = torch.randint(0, len(captions), (1,)).item()
         selected_caption = captions[random_caption_idx]
         tokenized_caption = self.tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=30, truncation=True)
+        # print(tokenized_caption['input_ids'].shape, "shazam")
 
         
         
         return {
             'image': image_processed,
-            'caption': tokenized_caption['input_ids'],
+            'caption': tokenized_caption['input_ids'].squeeze(0),
         }
     

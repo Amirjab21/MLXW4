@@ -24,6 +24,7 @@ class Attention_Layer(nn.Module):
 
         if mask is not None:
             nopeak_mask = (1 - torch.triu(torch.ones(query_key.size(-2), query_key.size(-1)), diagonal=1)).bool()
+            nopeak_mask = nopeak_mask.to(query_key.device)
             query_key = query_key.masked_fill(~nopeak_mask, float('-inf'))
             # print(mask.shape, 'mask.shape', query_key.shape)
             # query_key = query_key.masked_fill(~mask, float('-inf'))
@@ -48,14 +49,8 @@ class Cross_Attention_Layer(nn.Module):
         query = self.W_q(query_input)
         key = self.W_k(key_input)
         value = self.W_v(value_input)
-        print(query.shape, "query.shape")
-        print(key.shape, "key.shape")
-        print(value.shape, "value.shape")
         query_key = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(dim_k)
-        print(query_key.shape, "query_key.shape")
         prob = query_key.softmax(dim=-1)
-        print(prob.shape, "prob.shape")
         weighted_attention = torch.matmul(prob, value)
-        print(weighted_attention.shape, "weighted_attention.shape")
         return weighted_attention, prob
 

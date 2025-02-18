@@ -13,16 +13,9 @@ class Transformer(nn.Module):
         self.fc = nn.Linear(tgt_vocab_size, tgt_vocab_size)
 
     def forward(self, image, caption):
-        print(caption.shape, "caption.shape")
         # text_encoder_output = self.text_encoder.forward(caption)
-        # print(text_encoder_output)
-        # print(text_encoder_output.shape, "text_encoder_output.shape")
         image_encoder_output = self.image_encoder.forward(image)
-        print(image_encoder_output.last_hidden_state.shape, "image_encoder_output.shape")
-        # print(image_encoder_output.last_hidden_state, "image_encoder_output.shape")
-        # print(text_encoder_output.shape, image_encoder_output.shape)
         dec_output = self.decoder.forward(caption, image_encoder_output.last_hidden_state)
-        print(dec_output.shape, "dec_output.shape")
         output = self.fc(dec_output)
         return output
 
@@ -49,22 +42,11 @@ class DecoderLayer(nn.Module):
     def forward(self, x, encoder_output, mask):
         embedding = x
         attn, prob = self.self_attn_layer.forward(embedding, embedding, embedding, mask)
-        # print(attn.shape, "attn.shape")
-        # print(attn.shape, "attn.shape")
-        # print(embedding.shape, "embedding.shape")
         x = self.norm1(attn + embedding)
-        # print(x.shape, "x111.shape")
         attn, prob = self.cross_attn_layer.forward(query_input=x, key_input=encoder_output, value_input=encoder_output)
-        # print(attn.shape, "attncross.shape")
-        # print(attn.shape, "cross attn.shape")
-        # attn = self.projectbacktovocab(attn)
         x = self.norm2(x + attn)
-        # print(x.shape, "x222.shape")
         ff_output = self.FF_layer(x)
-        # print(ff_output.shape, "ff_output.shape")
         x = self.norm3(x + ff_output)
-        # print(x.shape, "x333.shape")
-        # x = self.projectbacktovocab(x)
         return x
 
 class Decoder(nn.Module):
@@ -81,14 +63,10 @@ class Decoder(nn.Module):
      def forward(self, x, encoder_output):
         # mask = self.generate_padding_mask(x)
         mask = True
-        # print(x.shape, "x.shape pre embedding")
         x = self.embedding_layer.forward(x).squeeze(1)
-        print(x.shape, "x.shape")
         for layer in self.layers:
             x = layer(x, encoder_output, mask)
-        print(x.shape, "x.shape after layers")
         x = self.projectbacktovocab(x)
-        print(x.shape, "x.shape after projectbacktovocab")
         x = self.norm1(x)
         return x
      
@@ -106,14 +84,12 @@ class Decoder(nn.Module):
             # batch_size, seq_length, _ = caption.shape
             
             # Get padding mask by checking if the last index (pad token) is 1
-            print(caption.shape, "caption.shape")
             padding_mask = (caption.squeeze(1) != self.pad_token).bool()  # [batch_size, seq_len]
     
             # Each item in the batch gets its own mask because:
             # 1. padding_mask is [batch_size, seq_len]
             # 2. When we do the unsqueeze operations, we maintain the batch dimension:
             padding_mask = padding_mask.unsqueeze(1) * padding_mask.unsqueeze(2)
-            print(padding_mask.shape, "padding_mask.shape", padding_mask[0])
             # Create final mask by combining padding and causal masks
             final_mask = padding_mask
             
