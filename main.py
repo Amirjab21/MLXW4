@@ -20,7 +20,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device, "device")
 
 dataset = load_dataset("nlphuji/flickr30k")
-sample_size = 15000 if torch.cuda.is_available() else 10
+sample_size = 15000 if torch.cuda.is_available() else 3
 dataset = dataset['test'].select(range(sample_size))
 
 def make_square(image):
@@ -61,8 +61,8 @@ image_encoder_output_dim = 768
 n_loops = 6
 
 # self_attn_layer = Attention_Layer(d_model=d_model, num_heads=1)
-self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=8)
-cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=8)
+self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=8, x_attn=False)
+cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=8, x_attn=True)
 
 feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048, d_model))
 
@@ -92,12 +92,12 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 32 if torch.cuda.is_available() else 1
+batch_size = 80 if torch.cuda.is_available() else 3
 # print(batch_size, "batch_size")
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 epochs = 10
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4 if torch.cuda.is_available() else 0, pin_memory=True)
 
@@ -117,63 +117,34 @@ def train():
             
             batch_loss = 0
             image, caption = batch['image'].to(device), batch['caption'].to(device)
-            # print(caption[0], 'caption.shape')
             
             optimizer.zero_grad()
             captionwithoutend = caption[:, :-1]
-            # print(captionwithoutend.shape ,"captionwithoutend shape")
             output = transformer.forward(image, captionwithoutend)
 
-
-            # Apply softmax across the vocabulary dimension (dim=2)
-
-            # print(predicted_digits[0], "predicted digits")
             true_indices = caption[:, 1:]
-            # true_indices = torch.argmax(caption[:,:, 1:], dim=1)  # Skip first position (START token)
-            # print(true_indices.shape, "true indices")
-            # print(predicted_digits.shape, "predicted digits")
-            # end_token = torch.full((label.size(0), 1), token_to_idx['<END>'], device=device)
-            # true_indices =   # Add END token
-            # print(true_indices[0])
+  
+            
+            # if batch_idx % 20 == 0:  # Print every 20 batches
+            #     output_probabilities = torch.softmax(output, dim=2)
+            #     predicted_digits = torch.argmax(output_probabilities, dim=2)
+            #     pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[0][:]]
+            #     true_words = [reverse_vocab[idx.item()] for idx in true_indices[0][:]]
+            #     print(f"Predicted: {pred_words} | True: {true_words}")
+            
 
-            # predicted_digits = [[reverse_vocab[idx.item()] for idx in pred] for pred in predicted_digits.squeeze(1)]
-            # true_digits = [[reverse_vocab[idx.item()] for idx in true] for true in true_indices.squeeze(1)]
-            
-            if batch_idx % 5 == 0:  # Print every 5 batches
-                output_probabilities = torch.softmax(output, dim=2)
-                predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, seq_length, 1
-                # true_indices = torch.argmax(caption[:, 1:], dim=1)  # Skip first position (START token)
-                for j in range(min(1, len(predicted_digits))):  # Show first 3 examples
-                    # print(f"Predicted: {predicted_digits[j]} | True: {true_indices[j]}")
-                    pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[j][:6]]
-                    true_words = [reverse_vocab[idx.item()] for idx in true_indices[j][:6]]
-                    print(f"Predicted: {pred_words} | True: {true_words}")
-            
-            # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
-            # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
-            # print(output.shape, "output.shape")
-            # print(true_indices.shape, "true_indices.shape")
-            # for i in range(5):  # For the 4 digits
-            #     batch_loss += criterion(output[:, i, :], true_indices[:, i])
-            # batch_loss = criterion(output.view(-1, output.size(-1)), true_indices.squeeze(1).view(-1)) #ALTERNATIVE LOSS FUNCTION
-            # print(output[0][2])
             output = output.reshape(-1, output.size(-1))  # Changed view to reshape
-            true_indices = true_indices.reshape(-1).long()  # Changed view to reshape and removed squeeze
+            true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
 
-            # print(f"After reshape:")
-            # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
-            # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
-            
+
             batch_loss = criterion(output, true_indices)
-            # batch_loss = torch.tensor(100.0, device=device, requires_grad=True)
-            # batch_loss = 100
             wandb.log({"batch_loss": batch_loss.item() })
             progress_bar.set_postfix({"batch_loss": batch_loss.item() })
 
             epoch_loss += batch_loss.item()
             total_loss += batch_loss.item()
             batch_loss.backward()
-            # optimizer.step()
+            optimizer.step()
         wandb.log({"epoch_loss": epoch_loss / len(dataloader.dataset)})
         wandb.log({"total_loss": total_loss / (epoch + 1)})
         # validate(transformer,100)

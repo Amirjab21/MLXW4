@@ -31,8 +31,8 @@ class Attention_Layer(nn.Module):
             # print("Mask shape:", mask.shape)
             # print("Query key shape:", query_key.shape)
             # print(query_key[0], 'first query key')
-            # query_key = query_key.masked_fill(~mask, float('-inf'))
-            # print(query_key[0], 'final query key')
+            query_key = query_key.masked_fill(~mask, float('-inf'))
+            print(query_key[0], 'final query key')
 
         prob = query_key.softmax(dim=-1)
         # print(prob[0], 'prob')
@@ -80,7 +80,7 @@ class Cross_Attention_Layer(nn.Module):
     
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, encoder_output_dim, decoder_dim, d_model, num_heads):
+    def __init__(self, encoder_output_dim, decoder_dim, d_model, num_heads, x_attn):
         super(MultiHeadAttention, self).__init__()
         # Ensure that the model dimension (d_model) is divisible by the number of heads
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
@@ -91,7 +91,7 @@ class MultiHeadAttention(nn.Module):
         self.d_k = d_model // num_heads # Dimension of each head's key, query, and value
 
         self.attn_probs = None
-
+        self.x_attn = x_attn
                 # Linear layers for transforming inputs
         self.W_q = nn.Linear(decoder_dim, d_model) # Query transformation
         self.W_k = nn.Linear(encoder_output_dim, d_model) # Key transformation
@@ -115,15 +115,21 @@ class MultiHeadAttention(nn.Module):
         
         # Apply mask if provided (useful for preventing attention to certain parts like padding)
         if mask is not None:
-            nopeak_mask = (1 - torch.triu(torch.ones(attn_scores.size(-2), attn_scores.size(-1)), diagonal=1)).bool().to(attn_scores.device)
-            attn_scores = attn_scores.masked_fill(~nopeak_mask, float('-inf'))
-            # print(mask.shape, 'mask.shape', query_key.shape)
-            # attn_scores = attn_scores.masked_fill(~mask, float('-inf'))
-        
-        # Softmax is applied to obtain attention probabilities
+            if self.x_attn:
+                mask = mask.unsqueeze(1)  # [batch,1,1,29]
+                mask = mask.expand(-1, self.num_heads, -1)  # [batch,heads,29]
+                mask = mask.unsqueeze(-1)  # [batch,heads,29,1]
+                mask = mask.expand(-1, -1, -1, attn_scores.size(-1))  # [batch,heads,29,50]
+                attn_scores = attn_scores.masked_fill(~mask, float(1e-9))  # Changed to -inf for proper masking
+            else:
+                nopeak_mask = (1 - torch.triu(torch.ones(attn_scores.size(-2), attn_scores.size(-1)), diagonal=1)).bool().to(attn_scores.device)
+                attn_scores = attn_scores.masked_fill(~nopeak_mask, float('-inf'))
+
+                mask = mask.unsqueeze(1) #This is for masking padding tokens, doesnt seem to improve performance
+                attn_scores = attn_scores.masked_fill(~mask, float(1e-9))
+            
         attn_probs = torch.softmax(attn_scores, dim=-1)
         
-        # Multiply by values to obtain the final output
         output = torch.matmul(attn_probs, V)
         return output, attn_probs
     
