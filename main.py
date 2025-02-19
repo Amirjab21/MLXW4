@@ -17,8 +17,9 @@ torch.cuda.empty_cache()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataset = load_dataset("nlphuji/flickr30k")
-sample_size = 15000 if torch.cuda.is_available() else 10
-dataset = dataset['test'].select(range(sample_size))
+sample_size = 30000 if torch.cuda.is_available() else 10
+dataset = dataset['test']
+# .select(range(sample_size))
 
 def make_square(image):
     size = max(image.size)
@@ -27,13 +28,31 @@ def make_square(image):
 
     return new_image
 
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ColorJitter(
+        brightness=0.15,  # Slight brightness adjustment
+        contrast=0.15,    # Slight contrast adjustment
+        saturation=0.15,  # Slight saturation adjustment
+        hue=0.1        # Small hue shifts for temperature variation
+    ),
+    transforms.ToTensor(),
+    transforms.Normalize(
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+)
+])
+
 def transform_images(examples):
     image = examples['image']
-    processed_image = np.array(make_square(image))
+    processed_image = transform(image)
+    # processed_image = np.array(make_square(image))
     return {
         'image': examples['image'],  
         'image_processed': processed_image, 
     }
+
+
 
 transformed_images = dataset.map(transform_images)
 
@@ -50,16 +69,24 @@ clip_text_model = CLIP.text_model
 
 dataset = Flickr30kDataset(transformed_images, tokenizer)
 
+train_size = int(0.95 * len(dataset))
+val_size = len(dataset) - train_size
+train_dataset, val_dataset = torch.utils.data.random_split(
+    dataset, 
+    [train_size, val_size]
+)
+
 
 
 d_model = 512
 text_dimension_embedding = 512
 image_encoder_output_dim = 768
 n_loops = 6
+num_heads = 8
 
 # self_attn_layer = Attention_Layer(d_model=d_model, num_heads=1)
-self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=8)
-cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=8)
+self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=num_heads)
+cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=num_heads)
 
 feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048, d_model))
 
@@ -89,7 +116,7 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 80 if torch.cuda.is_available() else 2
+batch_size = 80 if torch.cuda.is_available() else 4
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 # scheduler = get_linear_schedule_with_warmup(
@@ -100,15 +127,46 @@ optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 epochs = 10
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
-
+dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 transformer.to(device)
 
-def train():
-    wandb.init(project="flickr30k", name=f"flickr30k{datetime.now()}", config={"batch_size": batch_size, "learning_rate": learning_rate, "epochs": epochs})
-    transformer.train()
+def evaluate(transformer, val_loader):
+    transformer.eval()
+    total_loss = 0
+    num_batches = len(val_loader)
+    
+    # progress_bar = tqdm.tqdm(val_loader, desc="Evaluating")
+    
+    for _, batch in enumerate(val_loader):
+            
+        batch_loss = 0
+        image, caption = batch['image'].to(device), batch['caption'].to(device)
+        
+        optimizer.zero_grad()
+        captionwithoutend = caption[:, :-1]
+        output = transformer.forward(image, captionwithoutend)
+
+        true_indices = caption[:, 1:]
+
+
+        batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
+        
+        total_loss += batch_loss.item()
+        
+        # progress_bar.set_postfix({"val_loss": total_loss / (num_batches)})
+    
+    return total_loss / num_batches
+
+def train(log_wandb=True):
+    if log_wandb:
+        wandb.init(project="flickr30k", name=f"flickr30k{datetime.now()}", config={"batch_size": batch_size, "learning_rate": learning_rate, "epochs": epochs})
+
+    best_val_loss = float('inf')
+    
     total_loss = 0
     for epoch in range(epochs):
+        transformer.train()
         epoch_loss = 0
         progress_bar = tqdm.tqdm(
             dataloader, desc=f"Epoch {epoch + 1}/{epochs}"
@@ -126,6 +184,22 @@ def train():
             true_indices = caption[:, 1:]
   
             
+
+            
+
+            # output = output.reshape(-1, output.size(-1))  # Changed view to reshape
+            # true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
+
+
+            batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
+            if log_wandb:
+                wandb.log({"batch_loss": batch_loss.item() })
+            progress_bar.set_postfix({"batch_loss": batch_loss.item() })
+
+            epoch_loss += batch_loss.item()
+            total_loss += batch_loss.item()
+            batch_loss.backward()
+            optimizer.step()
             if batch_idx == len(progress_bar) - 1:  # Print every 20 batches
                 output_probabilities = torch.softmax(output, dim=2)
                 predicted_digits = torch.argmax(output_probabilities, dim=2)
@@ -135,27 +209,26 @@ def train():
                     print(f"Example {i+1}:")
                     print(f"Predicted: {pred_words}")
                     print(f"True: {true_words}\n")
-            
-
-            output = output.reshape(-1, output.size(-1))  # Changed view to reshape
-            true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
-
-
-            batch_loss = criterion(output, true_indices)
-            wandb.log({"batch_loss": batch_loss.item() })
-            progress_bar.set_postfix({"batch_loss": batch_loss.item() })
-
-            epoch_loss += batch_loss.item()
-            total_loss += batch_loss.item()
-            batch_loss.backward()
-            optimizer.step()
-        wandb.log({"epoch_loss": epoch_loss / len(dataloader.dataset)})
-        wandb.log({"total_loss": total_loss / (epoch + 1)})
-        # validate(transformer,100)
+        val_loss = evaluate(transformer, val_loader)
+        if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save(
+                    transformer.state_dict(),
+                    f"best_model.pth"
+                )
+                print(f"Saved new best model with val_loss={val_loss:.4f}")
+        if log_wandb:
+            wandb.log({"epoch_loss": epoch_loss / len(dataloader.dataset), "total_loss": total_loss / (epoch + 1), "val_loss": val_loss})
         epoch_loss = epoch_loss / len(dataloader.dataset)
         print(f"Total {epoch + 1}/{epochs}, Loss: {total_loss / (epoch + 1):.4f}")
+        
 
         
-train()
+train(True)
+checkpoint_path = 'best_model.pt'
+torch.save({ 'model_state_dict': transformer.state_dict()}, checkpoint_path)
+artifact = wandb.Artifact('model-weights', type='model')
+artifact.add_file(checkpoint_path)
+wandb.log_artifact(artifact)
 
 

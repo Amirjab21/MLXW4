@@ -41,7 +41,9 @@ class DecoderLayer(nn.Module):
         self.tgt_vocab_size = tgt_vocab_size
         self.input_dim = input_dim
         self.n_loops = n_loops
-
+        self.dropout1 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(0.1)
+        
         # self.projectbacktovocab = torch.nn.Linear(intermediate_attn_dim, tgt_vocab_size)
 
         self.norm1 = torch.nn.LayerNorm(input_dim)
@@ -51,10 +53,12 @@ class DecoderLayer(nn.Module):
     def forward(self, x, encoder_output, mask):
         embedding = x
         attn, prob = self.self_attn_layer.forward(embedding, embedding, embedding, mask)
+        attn = self.dropout1(attn)
         x = self.norm1(attn + embedding)
         # attn, prob = self.cross_attn_layer.forward(query_input=x, key_input=encoder_output, value_input=encoder_output, mask=None)
         # x = self.norm2(x + attn)
         ff_output = self.FF_layer(x)
+        ff_output = self.dropout2(ff_output)
         x = self.norm3(x + ff_output)
         return x
 

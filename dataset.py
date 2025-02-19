@@ -2,7 +2,7 @@ import torch
 from transformers import BertTokenizer, CLIPModel, CLIPProcessor
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
 import numpy as np
-
+from torchvision import transforms
 
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
@@ -20,7 +20,15 @@ def split_image_to_patches(image, image_height, image_width, patch_size, channel
                 block = image[c, i*patch_size : (i+1)*patch_size , j*patch_size : (j+1)*patch_size]
                 blocks.append(block)
     return blocks
-    
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+)
+])
     
 
 class Flickr30kDataset(torch.utils.data.Dataset):
@@ -33,11 +41,10 @@ class Flickr30kDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         dataset = self.dataset[idx]
-        image = dataset['image_processed'] #height, width, channels
+        image = transform(dataset['image']) #height, width, channels
         captions = dataset['caption']
-        
-        image_processed = processor(images=np.array(image), return_tensors="pt", padding=True)
-        image_processed = image_processed['pixel_values'].squeeze(0)
+        # image_processed = processor(images=np.array(transform(image)), return_tensors="pt", padding=True)
+        # image_processed = image_processed['pixel_values'].squeeze(0)
         # patches_array = split_image_to_patches(image, image.shape[0], image.shape[1], 32, 3)
         # patches_tensor = [torch.tensor(patch.flatten(), dtype=torch.float32) for patch in patches_array] 
         # image_tensor = torch.stack(patches_tensor)
@@ -52,7 +59,7 @@ class Flickr30kDataset(torch.utils.data.Dataset):
         
         
         return {
-            'image': image_processed,
+            'image': image,
             'caption': tokenized_caption['input_ids'].squeeze(0),
         }
     
