@@ -14,10 +14,7 @@ import wandb
 from datetime import datetime
 torch.cuda.empty_cache()
 
-# device = torch.device("cpu")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print(device, "device")
 
 dataset = load_dataset("nlphuji/flickr30k")
 sample_size = 15000 if torch.cuda.is_available() else 10
@@ -92,9 +89,14 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 48 if torch.cuda.is_available() else 2
+batch_size = 80 if torch.cuda.is_available() else 2
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
+# scheduler = get_linear_schedule_with_warmup(
+#             optimizer,
+#             num_warmup_steps=1000,
+#             num_training_steps=total_steps
+#         )
 epochs = 10
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
@@ -124,12 +126,15 @@ def train():
             true_indices = caption[:, 1:]
   
             
-            if batch_idx % 20 == 0:  # Print every 20 batches
+            if batch_idx == len(progress_bar) - 1:  # Print every 20 batches
                 output_probabilities = torch.softmax(output, dim=2)
                 predicted_digits = torch.argmax(output_probabilities, dim=2)
-                pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[0][:]]
-                true_words = [reverse_vocab[idx.item()] for idx in true_indices[0][:]]
-                print(f"Predicted: {pred_words} | True: {true_words}")
+                for i in range(min(3, len(predicted_digits))):
+                    pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[i][:]]
+                    true_words = [reverse_vocab[idx.item()] for idx in true_indices[i][:]]
+                    print(f"Example {i+1}:")
+                    print(f"Predicted: {pred_words}")
+                    print(f"True: {true_words}\n")
             
 
             output = output.reshape(-1, output.size(-1))  # Changed view to reshape
@@ -148,8 +153,6 @@ def train():
         wandb.log({"total_loss": total_loss / (epoch + 1)})
         # validate(transformer,100)
         epoch_loss = epoch_loss / len(dataloader.dataset)
-        # total_loss += epoch_loss
-        # print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss:.4f}")
         print(f"Total {epoch + 1}/{epochs}, Loss: {total_loss / (epoch + 1):.4f}")
 
         
