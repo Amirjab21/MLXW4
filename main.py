@@ -139,15 +139,15 @@ def train():
             # predicted_digits = [[reverse_vocab[idx.item()] for idx in pred] for pred in predicted_digits.squeeze(1)]
             # true_digits = [[reverse_vocab[idx.item()] for idx in true] for true in true_indices.squeeze(1)]
             
-            if batch_idx % 5 == 0:  # Print every 5 batches
-                output_probabilities = torch.softmax(output, dim=2)
-                predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, seq_length, 1
-                # true_indices = torch.argmax(caption[:, 1:], dim=1)  # Skip first position (START token)
-                for j in range(min(1, len(predicted_digits))):  # Show first 3 examples
-                    # print(f"Predicted: {predicted_digits[j]} | True: {true_indices[j]}")
-                    pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[j][:6]]
-                    true_words = [reverse_vocab[idx.item()] for idx in true_indices[j][:6]]
-                    print(f"Predicted: {pred_words} | True: {true_words}")
+            # if batch_idx % 5 == 0:  # Print every 5 batches
+            #     output_probabilities = torch.softmax(output, dim=2)
+            #     predicted_digits = torch.argmax(output_probabilities, dim=2)  # Shape: [batch_size, seq_length, 1
+            #     # true_indices = torch.argmax(caption[:, 1:], dim=1)  # Skip first position (START token)
+            #     for j in range(min(1, len(predicted_digits))):  # Show first 3 examples
+            #         # print(f"Predicted: {predicted_digits[j]} | True: {true_indices[j]}")
+            #         pred_words = [reverse_vocab[idx.item()] for idx in predicted_digits[j][:6]]
+            #         true_words = [reverse_vocab[idx.item()] for idx in true_indices[j][:6]]
+            #         print(f"Predicted: {pred_words} | True: {true_words}")
             
             # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
             # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
@@ -158,12 +158,11 @@ def train():
             # batch_loss = criterion(output.view(-1, output.size(-1)), true_indices.squeeze(1).view(-1)) #ALTERNATIVE LOSS FUNCTION
             # print(output[0][2])
             output = output.reshape(-1, output.size(-1))  # Changed view to reshape
-            true_indices = true_indices.reshape(-1).long()  # Changed view to reshape and removed squeeze
+            true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
 
             # print(f"After reshape:")
             # print(f"Output shape: {output.shape}, dtype: {output.dtype}")
             # print(f"True indices shape: {true_indices.shape}, dtype: {true_indices.dtype}")
-            
             batch_loss = criterion(output, true_indices)
             # batch_loss = torch.tensor(100.0, device=device, requires_grad=True)
             # batch_loss = 100
