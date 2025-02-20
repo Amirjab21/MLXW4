@@ -125,7 +125,7 @@ optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 #             num_training_steps=total_steps
 #         )
 epochs = 13
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=49408)
 
 dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)

@@ -75,30 +75,30 @@ decoder = Decoder(vocab_size + 1, pad_token=tokenizer.pad_token_id, embedding_la
 transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size + 1, pad_token=tokenizer.pad_token_id)
 
 def __getitem__(idx, dataset):
-        dataset = dataset[idx]
-        original_image = dataset['image']
-        image = transform(dataset['image']) #height, width, channels
-        captions = dataset['caption']
+    dataset = dataset[idx]
+    original_image = dataset['image']
+    image = transform(dataset['image']) #height, width, channels
+    captions = dataset['caption']
 
-        random_caption_idx = torch.randint(0, len(captions), (1,)).item()
-        selected_caption = captions[random_caption_idx]
+    random_caption_idx = torch.randint(0, len(captions), (1,)).item()
+    selected_caption = captions[random_caption_idx]
 
-        tokenized_caption = tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
-        input_ids = tokenized_caption['input_ids']
+    tokenized_caption = tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
+    input_ids = tokenized_caption['input_ids']
 
-        eos_positions = (input_ids == tokenizer.eos_token_id).nonzero()
-        if len(eos_positions) > 0:
-            first_eos_pos = eos_positions[0][1]
-            input_ids[0, first_eos_pos+1:] = 49408
+    eos_positions = (input_ids == tokenizer.eos_token_id).nonzero()
+    if len(eos_positions) > 0:
+        first_eos_pos = eos_positions[0][1]
+        input_ids[0, first_eos_pos+1:] = 49408
 
-        tokenized_caption['input_ids'] = input_ids
-                
-        return {
-            'image': image,
-            "original_image": original_image,
-            'caption': tokenized_caption['input_ids'].squeeze(0),
-            "original caption": selected_caption
-        }
+    tokenized_caption['input_ids'] = input_ids
+            
+    return {
+        'image': image,
+        "original_image": original_image,
+        'caption': tokenized_caption['input_ids'].squeeze(0),
+        "original caption": selected_caption
+    }
 
 # data = __getitem__(0, transformed_images)
 checkpoint = torch.load("checkpoints/best_model.pt", map_location=torch.device("cpu"))
@@ -109,7 +109,7 @@ def evaluate(transformer, data):
     MAX_SEQ_LENGTH = 35
     START_TOKEN_ID = 49406
     A_ID = 599
-    temperature = 0.34  # Add temperature parameter
+    temperature = 0.3  # Add temperature parameter
     # PAD_TOKEN_ID = 49408
     current_sequence = torch.full((1, 1), START_TOKEN_ID)
     predicted_indices = torch.zeros((1, 1))
@@ -123,7 +123,7 @@ def evaluate(transformer, data):
         logits = output / temperature
         output_probabilities = torch.softmax(logits, dim=2)
 
-        predicted_digits = torch.multinomial(output_probabilities[0, pos], num_samples=1, dim=2)
+        predicted_digits = torch.multinomial(output_probabilities[0, pos], num_samples=1)
         # print(predicted_digits, "pred")
 
         if pos < MAX_SEQ_LENGTH - 1:
@@ -145,13 +145,13 @@ def evaluate(transformer, data):
     plt.show()
     
 # for i in range(10):
-evaluate(transformer, __getitem__(35, transformed_images))
+# evaluate(transformer, __getitem__(20, transformed_images))
 def evaluate_topk(transformer, data, k):
     transformer.train()
     MAX_SEQ_LENGTH = 35
     START_TOKEN_ID = 49406
     # PAD_TOKEN_ID = 49408
-    BEAM_WIDTH = 3
+    BEAM_WIDTH = k
     
     # Initialize beam with start token
     current_sequences = torch.full((BEAM_WIDTH, 1), START_TOKEN_ID)
@@ -189,11 +189,124 @@ def evaluate_topk(transformer, data, k):
                               if token not in ['<|endoftext|>', '<<<PAD>>>'])
         predicted_indices_list.append(cleaned_text)
     print(predicted_indices_list, "PREDICTED INDICES LIST")
+    return predicted_indices_list
+    # plt.imshow(data['original_image'])
+    # # Join all captions with newlines and display them as the title
+    # all_captions = '\n'.join(f"Caption {i+1}: {text}" for i, text in enumerate(predicted_indices_list))
+    # plt.title(all_captions, wrap=True, pad=15)  # Added more padding to accommodate multiple lines
+    # plt.axis('off')  # Hide axes
+    # plt.show()
+
+# evaluate_topk(transformer, __getitem__(27, transformed_images), 10)
+
+
+
+def rank_captions_with_clip(image, captions, clip_model, processor):
+    """
+    Ranks captions for an image using CLIP model
+    Args:
+        image: PIL Image
+        captions: list of strings containing candidate captions
+        clip_model: CLIP model instance
+        processor: CLIP processor instance
+    Returns:
+        List of (caption, score) tuples, sorted by similarity score
+    """
+    # Prepare image
+    inputs = processor(images=image, return_tensors="pt")
+    image_features = clip_model.get_image_features(**inputs)
+    
+    # Prepare text
+    # print(captions, "captions")
+    text_inputs = processor(text=captions, return_tensors="pt", padding=True)
+    print(text_inputs, "text_inputs")
+    text_features = clip_model.get_text_features(text_inputs['input_ids'].squeeze(0))
+    
+    # Calculate similarity scores
+    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+    text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+    
+    similarity = (100.0 * image_features @ text_features.T).squeeze(0)
+    scores = similarity.tolist()
+    
+    # Create and sort (caption, score) pairs
+    caption_scores = list(zip(captions, scores))
+    caption_scores.sort(key=lambda x: x[1], reverse=True)
+    
+    return caption_scores
+
+# Example usage with your existing code:
+def evaluate_with_clip(transformer, data, k=2):
+    # First generate k captions using your existing evaluate_topk logic
+    transformer.eval()
+    MAX_SEQ_LENGTH = 35
+    START_TOKEN_ID = 49406
+    BEAM_WIDTH = k
+    
+    # ... [Generate captions using your existing beam search logic] ...
+    # For brevity, I'm simplifying this part - you should use your existing caption generation code
+    
+    # After generating captions, rank them with CLIP
+    generated_captions = evaluate_topk(transformer, data, k)  # Modify evaluate_topk to return the captions
+    
+    ranked_captions = rank_captions_with_clip(
+        data['original_image'], 
+        generated_captions, 
+        CLIP, 
+        processor
+    )
+    
+    # Display results
     plt.imshow(data['original_image'])
+    all_captions = '\n'.join(f"Caption {i+1} (Score: {score:.2f}): {caption}" 
+                            for i, (caption, score) in enumerate(ranked_captions))
+    plt.title(all_captions, wrap=True, pad=15)
+    plt.axis('off')
+    plt.show()
+    
+    return ranked_captions
+
+# evaluate_with_clip(transformer, __getitem__(27, transformed_images), 2)
+
+
+def newest(image_path=None):
+    model = transformers.CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+    item = __getitem__(91, transformed_images)
+    # Load the single image
+    if image_path is not None:
+        from PIL import Image
+        image = Image.open(image_path)
+    else:
+        image = item['original_image']
+
+    # List of captions (5 captions)
+    captions = evaluate_topk(transformer, item, 10)
+
+    # Preprocess the image and captions
+    inputs = processor(text=captions, images=image, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
+
+    # Get the model's output
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Get the logits per caption
+    logits_per_caption = outputs.logits_per_text
+    print(logits_per_caption, "logits_per_caption")
+
+    # Find the caption index with the highest score
+    best_caption_idx = torch.argmax(logits_per_caption).item()
+
+    # Print the best matching caption
+    print(f"The best matching caption is: {captions[best_caption_idx]}")
+    best_caption = captions[best_caption_idx]
+
+    plt.imshow(image)
     # Join all captions with newlines and display them as the title
-    all_captions = '\n'.join(f"Caption {i+1}: {text}" for i, text in enumerate(predicted_indices_list))
-    plt.title(all_captions, wrap=True, pad=15)  # Added more padding to accommodate multiple lines
+    # all_captions = '\n'.join(f"Caption {i+1}: {text}" for i, text in enumerate(captions))
+    plt.title(best_caption, wrap=True, pad=15)  # Added more padding to accommodate multiple lines
     plt.axis('off')  # Hide axes
     plt.show()
 
-# evaluate_topk(transformer, __getitem__(105, transformed_images), 3)
+newest("twogirls.jpg")

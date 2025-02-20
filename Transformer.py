@@ -20,6 +20,7 @@ class Transformer(nn.Module):
         final_mask, padding_mask = self.generate_padding_mask(caption)
         # text_embeddings = self.text_encoder(caption)
         image_encoder_output = self.clip.get_image_features(image)
+        # print(image_encoder_output, "image_encoder_output")
         text_embeddings = self.text_embedding(caption)
         
         sequence = torch.cat((image_encoder_output.unsqueeze(1), text_embeddings), dim=1)
@@ -39,23 +40,16 @@ class Transformer(nn.Module):
             - future tokens are masked with 0 (causal masking)
             - valid tokens are marked with 1
         """
-        # batch_size, seq_length, _ = caption.shape
-        
-        # Get padding mask by checking if the last index (pad token) is 1
-        # print(caption.shape, "caption")
-        padding_mask = (caption.squeeze(1) != self.pad_token).bool()  # [batch_size, seq_len]
+        # print(caption.shape, "CAPTION", caption.squeeze(1).shape)
+        padding_mask = (caption != self.pad_token).bool()  # [batch_size, seq_len]
+        # print(padding_mask.shape, "PADDING MASK")
         padding_mask = torch.cat([torch.ones(padding_mask.shape[0], 1, device=padding_mask.device, dtype=torch.bool), padding_mask], dim=1)
         # Each item in the batch gets its own mask because:
         # 1. padding_mask is [batch_size, seq_len]
         # 2. When we do the unsqueeze operations, we maintain the batch dimension:
         padding_mask_self = padding_mask.unsqueeze(1) * padding_mask.unsqueeze(2)
-        # Create final mask by combining padding and causal masks
         final_mask = padding_mask_self
-        # cross_attn_mask = padding ._ma .sk
-        # print(padding_mask[0], "padding mask")
-        # print(cross_attn_mask[1], "final_mask")
-        # Create final mask by combining padding and causal masks
-        
+        # print(final_mask, "final_mask")
         return final_mask, padding_mask
 
 def clones(module, N):
