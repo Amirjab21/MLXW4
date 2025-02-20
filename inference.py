@@ -109,34 +109,30 @@ def evaluate(transformer, data):
     MAX_SEQ_LENGTH = 35
     START_TOKEN_ID = 49406
     A_ID = 599
-    temperature = 0.5  # Add temperature parameter
+    temperature = 0.34  # Add temperature parameter
     # PAD_TOKEN_ID = 49408
     current_sequence = torch.full((1, 1), START_TOKEN_ID)
     predicted_indices = torch.zeros((1, 1))
     
     # Generate one digit at a time
     for pos in range(MAX_SEQ_LENGTH):
+        print(data['image'].unsqueeze(0).shape, current_sequence.shape, "ok")
         output = transformer.forward(data['image'].unsqueeze(0), current_sequence)
-        
-        temperature = 0.7  # Add temperature parameter
+         
 
-        # logits = output / temperature
-        # output_probabilities = torch.softmax(logits, dim=2)
-        # # Sample from the distribution
-        # predicted_digits = torch.multinomial(output_probabilities.reshape(-1, output_probabilities.size(-1)), num_samples=1).reshape(output_probabilities.size(0), -1)
-        # if (pos == 1):
-        #     print(predicted_digits)
-        output_probabilities = torch.softmax(output, dim=2)
+        logits = output / temperature
+        output_probabilities = torch.softmax(logits, dim=2)
 
-        predicted_digits = torch.argmax(output_probabilities[0, pos])
+        predicted_digits = torch.multinomial(output_probabilities[0, pos], num_samples=1, dim=2)
+        # print(predicted_digits, "pred")
 
         if pos < MAX_SEQ_LENGTH - 1:
             current_sequence = torch.cat((current_sequence, torch.tensor([predicted_digits.item()]).unsqueeze(0)), dim=1)
-        print(current_sequence)
+        # print(current_sequence)
         if pos == 0:
             predicted_indices[0, 0] = predicted_digits.item()
         else:
-            predicted_indices = torch.cat((predicted_indices, predicted_digits.unsqueeze(0).unsqueeze(0)), dim=1)
+            predicted_indices = torch.cat((predicted_indices, predicted_digits.unsqueeze(0)), dim=1)
         
 
 
@@ -149,8 +145,7 @@ def evaluate(transformer, data):
     plt.show()
     
 # for i in range(10):
-evaluate(transformer, __getitem__(104, transformed_images))
-
+evaluate(transformer, __getitem__(35, transformed_images))
 def evaluate_topk(transformer, data, k):
     transformer.train()
     MAX_SEQ_LENGTH = 35
