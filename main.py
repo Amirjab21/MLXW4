@@ -5,7 +5,7 @@ from PIL import Image, ImageOps
 import transformers
 from dataset import Flickr30kDataset
 from Transformer import Transformer, Decoder, DecoderLayer
-from Attention import Attention_Layer, Cross_Attention_Layer, MultiHeadAttention
+from Attention import MultiHeadAttention
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import tqdm
@@ -17,8 +17,8 @@ torch.cuda.empty_cache()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataset = load_dataset("nlphuji/flickr30k")
-sample_size = 30000 if torch.cuda.is_available() else 10
-dataset = dataset['test']
+sample_size = 31000 if torch.cuda.is_available() else 10
+dataset = dataset['test'].select(range(sample_size))
 # .select(range(sample_size))
 
 def make_square(image):
@@ -60,7 +60,7 @@ CLIP = transformers.CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 tokenizer = processor.tokenizer
-
+tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
 vocab = tokenizer.get_vocab()  # Returns dict of {token: index}
 vocab_size = tokenizer.vocab_size
 reverse_vocab = {idx: token for token, idx in vocab.items()}
@@ -93,18 +93,14 @@ feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
 
-decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
+decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size + 1, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
 
 
 
-decoder = Decoder(vocab_size, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
+decoder = Decoder(vocab_size + 1, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
 
 
-transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size)
-
-
-
-
+transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size + 1, pad_token=tokenizer.pad_token_id)
 
 
 
@@ -116,7 +112,11 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 80 if torch.cuda.is_available() else 4
+
+
+
+
+batch_size = 80 if torch.cuda.is_available() else 2
 learning_rate = 0.001
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 # scheduler = get_linear_schedule_with_warmup(
@@ -124,8 +124,8 @@ optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 #             num_warmup_steps=1000,
 #             num_training_steps=total_steps
 #         )
-epochs = 10
-criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+epochs = 13
+criterion = nn.CrossEntropyLoss()
 
 dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
@@ -152,7 +152,7 @@ def evaluate(transformer, val_loader):
 
         batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
         
-        total_loss += batch_loss.item()
+        total_loss += batch_loss.item() 
         
         # progress_bar.set_postfix({"val_loss": total_loss / (num_batches)})
     

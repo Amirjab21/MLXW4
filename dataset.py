@@ -50,11 +50,25 @@ class Flickr30kDataset(torch.utils.data.Dataset):
         # image_tensor = torch.stack(patches_tensor)
 
 
-        
+        # self.tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
         random_caption_idx = torch.randint(0, len(captions), (1,)).item()
         selected_caption = captions[random_caption_idx]
-        tokenized_caption = self.tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=30, truncation=True)
-        # print(tokenized_caption['input_ids'].shape, "shazam")
+        # self.tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
+
+        tokenized_caption = self.tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
+        input_ids = tokenized_caption['input_ids']
+
+        eos_positions = (input_ids == self.tokenizer.eos_token_id).nonzero()
+        if len(eos_positions) > 0:
+            first_eos_pos = eos_positions[0][1]
+            
+            # Replace all padding tokens after the first EOS with 49408 (<<<PAD>>>)
+            # Keep one EOS token (49407) at the first EOS position
+            input_ids[0, first_eos_pos+1:] = 49408
+
+        tokenized_caption['input_ids'] = input_ids
+        # print(tokenized_caption['input_ids'])
+        
 
         
         
