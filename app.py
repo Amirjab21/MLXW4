@@ -51,12 +51,13 @@ text_dimension_embedding = 512
 image_encoder_output_dim = 768
 n_loops = 6
 num_heads = 8
+hidden_dim = 2048
 
 # self_attn_layer = Attention_Layer(d_model=d_model, num_heads=1)
 self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=num_heads)
 cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=num_heads)
 
-feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048, d_model))
+feed_forward = nn.Sequential(nn.Linear(d_model, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, d_model))
 
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
@@ -69,7 +70,7 @@ decoder = Decoder(vocab_size_final, pad_token=tokenizer.pad_token_id, embedding_
 transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size_final, pad_token=tokenizer.pad_token_id)
 
 # data = __getitem__(0, transformed_images)
-checkpoint = torch.load("checkpoints/model_exp_decay_corrected.pt", map_location=torch.device("cpu"))
+checkpoint = torch.load("checkpoints/best_model_1434.pt", map_location=torch.device("cpu"))
 transformer.load_state_dict(checkpoint['model_state_dict'])
 print("here")
 def evaluate_topk(transformer, data, k):
@@ -206,6 +207,7 @@ async def generate_captions(transformer, data, k):
         predicted_digits = [reverse_vocab[idx.item()] for idx in predicted_indices.squeeze(0)]
         cleaned_text = ' '.join(token.replace('</w>', '') for token in predicted_digits 
                               if token not in ['<|endoftext|>', '<<<PAD>>>'])
+        print("cleaned_text", cleaned_text)
         yield json.dumps({"caption": cleaned_text}) + "\n"
 
 @app.post("/submit")
@@ -235,37 +237,6 @@ async def upload_image(file: UploadFile):
     except Exception as e:
         print(f"Error: {str(e)}")
         return {"error": str(e)}
-
-# @app.post("/submit")
-# async def submit(request, file: UploadFile = File(...)):  # Changed parameter definition
-#     logger.debug("Endpoint hit")
-#     print("Endpoint hit")
-    
-#     try:
-#         form = await request.form()
-#         logger.debug(f"Form data received: {form}")
-        
-#         if "file" not in form:
-#             return {"error": "No file in form data"}
-            
-#         file = form["file"]
-#         logger.debug(f"File received: {file.filename}")
-        
-#         # Read and process the uploaded image
-#         image_content = await file.read()
-#         image = Image.open(io.BytesIO(image_content))
-        
-#         # Save the image temporarily
-#         temp_path = "temp_uploaded_image.jpg"
-#         image.save(temp_path)
-#         logger.debug(f"Saved image to {temp_path}")
-#         # Call the newest() function with the temporary image path
-#         # Modify the newest function call to capture the caption instead of showing the plot
-#         captions = newest(image_path=temp_path)
-        
-#         # return {"caption": best_caption, "all_captions": captions}
-#     except Exception as e:
-#         return {"error": str(e)}
 
 @app.get("/")
 async def root():

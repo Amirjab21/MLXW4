@@ -62,45 +62,48 @@ function App() {
   }
 
   return (
-    <div className="container">
-      <h1>Image Caption Generator</h1>
-      <div className="upload-section">
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handleFileSelect}
-          className="file-input"
-        />
-        <button 
-          onClick={handleUpload}
-          disabled={!selectedFile || uploading}
-          className="upload-button"
-        >
-          {uploading ? 'Generating Captions...' : 'Generate Captions'}
-        </button>
-      </div>
-      {selectedFile && (
-        <div className="preview">
-          <p>Selected file: {selectedFile.name}</p>
-          <img 
-            src={URL.createObjectURL(selectedFile)} 
-            alt="Preview" 
-            style={{ maxWidth: '300px' }} 
+    <div style={{display: 'flex', flexDirection: 'row'}}>
+      <div className="container">
+        <h1>Image Caption Generator</h1>
+        <div className="upload-section">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleFileSelect}
+            className="file-input"
           />
+          <button 
+            onClick={handleUpload}
+            disabled={!selectedFile || uploading}
+            className="upload-button"
+          >
+            {uploading ? 'Generating Captions...' : 'Generate Captions'}
+          </button>
         </div>
-      )}
+        {selectedFile && (
+          <div className="preview">
+            <p>Selected file: {selectedFile.name}</p>
+            <img 
+              src={URL.createObjectURL(selectedFile)} 
+              alt="Preview" 
+              style={{ maxWidth: '300px' }} 
+            />
+          </div>
+        )}
+        
+      </div>
       {captions.length > 0 && (
-        <div className="result">
-          <h3>Generated Captions:</h3>
-          <ul className="captions-list">
-            {captions.map((caption, index) => (
-              <li key={index} className="caption-item">
-                {caption}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+          <div className="result" style={{alignSelf: 'center'}}>
+            <h3>Generated Captions:</h3>
+            <ul className="captions-list">
+              {captions.map((caption, index) => (
+                <li key={index} className="caption-item">
+                  {caption}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
     </div>
   )
 }
