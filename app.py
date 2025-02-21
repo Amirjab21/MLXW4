@@ -13,6 +13,8 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from PIL import Image
+from fastapi.responses import StreamingResponse
+import json
 
 app = FastAPI()
 
@@ -164,37 +166,71 @@ def newest(image_path="man.jpg"):
 import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+async def generate_captions(transformer, data, k):
+    transformer.eval()
+    MAX_SEQ_LENGTH = 35
+    START_TOKEN_ID = 49406
+    BEAM_WIDTH = k
+    
+    # Initialize beam with start token
+    current_sequences = torch.full((BEAM_WIDTH, 1), START_TOKEN_ID)
+    
+    # Generate first token with beam search
+    output = transformer.forward(data['image']['pixel_values'].repeat(BEAM_WIDTH, 1, 1, 1), current_sequences)
+    output_probabilities = torch.softmax(output, dim=2)
+    top_k_values, top_k_indices = torch.topk(output_probabilities[0, 0], k=BEAM_WIDTH)
+    
+    # Create BEAM_WIDTH different sequences
+    for beam_idx in range(BEAM_WIDTH):
+        current_sequence = torch.full((1, 1), START_TOKEN_ID)
+        predicted_indices = torch.zeros((1, 1))
+        
+        # Use the beam_idx-th best first token
+        first_token = top_k_indices[beam_idx].item()
+        current_sequence = torch.cat((current_sequence, torch.tensor([first_token]).unsqueeze(0)), dim=1)
+        predicted_indices[0, 0] = first_token
+        
+        # Continue generating remaining tokens
+        for pos in range(1, MAX_SEQ_LENGTH):
+            output = transformer.forward(data['image']['pixel_values'], current_sequence)
+            output_probabilities = torch.softmax(output, dim=2)
+            predicted_digit = torch.argmax(output_probabilities[0, pos])
+            
+            if pos < MAX_SEQ_LENGTH - 1:
+                current_sequence = torch.cat((current_sequence, torch.tensor([predicted_digit.item()]).unsqueeze(0)), dim=1)
+            
+            predicted_indices = torch.cat((predicted_indices, predicted_digit.unsqueeze(0).unsqueeze(0)), dim=1)
+        
+        # Convert to text and yield immediately
+        predicted_digits = [reverse_vocab[idx.item()] for idx in predicted_indices.squeeze(0)]
+        cleaned_text = ' '.join(token.replace('</w>', '') for token in predicted_digits 
+                              if token not in ['<|endoftext|>', '<<<PAD>>>'])
+        yield json.dumps({"caption": cleaned_text}) + "\n"
+
 @app.post("/submit")
 async def upload_image(file: UploadFile):
-    print("Received request")
-    
     try:
-        # Read the image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
-        print("image", image)
         
-        # Convert RGBA to RGB if necessary
         if image.mode in ('RGBA', 'LA'):
             background = Image.new('RGB', image.size, (255, 255, 255))
             if image.mode == 'RGBA':
-                background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+                background.paste(image, mask=image.split()[3])
             else:
-                background.paste(image, mask=image.split()[1])  # 1 is the alpha channel
+                background.paste(image, mask=image.split()[1])
             image = background
         elif image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Save it
         image.save("uploaded_image.jpg", "JPEG")
-        # item = {
-        #     'image': image,
-        #     'image_processed': image,
-        # }
-        # processed_image = transform(image)
-        captions = newest(image_path="uploaded_image.jpg")
+        item = __getitem__(image)
         
-        return {"message": "Image uploaded successfully"}
+        return StreamingResponse(
+            generate_captions(transformer, item, 5),
+            media_type='text/event-stream'
+        )
         
     except Exception as e:
         print(f"Error: {str(e)}")
