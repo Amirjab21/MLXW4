@@ -13,10 +13,12 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model # Model's dimension
         self.num_heads = num_heads # Number of attention heads
         self.d_k = d_model // num_heads # Dimension of each head's key, query, and value
+        
+        # For storing attention weights during debugging
+        self.store_attention_weights = False
+        self.last_attention_weights = None
 
-        self.attn_probs = None
-
-                # Linear layers for transforming inputs
+        # Linear layers for transforming inputs
         self.W_q = nn.Linear(decoder_dim, d_model) # Query transformation
         self.W_k = nn.Linear(encoder_output_dim, d_model) # Key transformation
         self.W_v = nn.Linear(encoder_output_dim, d_model) # Value transformation
@@ -42,30 +44,37 @@ class MultiHeadAttention(nn.Module):
             padding_mask = mask.unsqueeze(1)  # [batch, 1, 1, seq_len]
             padding_mask = padding_mask.expand(-1, -1, attn_scores.size(-2), -1)  # [batch, 1, seq_len, seq_len]
             
-            # Debug prints
-           
+            # Debug prints for masking
+            if self.store_attention_weights:
+                print("\nAttention scores before masking:")
+                print(attn_scores[0, 0, :5, :5])  # Show first 5x5 elements
             
             # Apply padding mask
             attn_scores = attn_scores.masked_fill(~padding_mask, float(1e-9))
             
+            # Create and apply causal mask
             nopeak_mask = (1 - torch.triu(torch.ones(attn_scores.size(-2), attn_scores.size(-1)), diagonal=1)).bool().to(attn_scores.device)
+            
+            # Debug prints for causal masking
+            if self.store_attention_weights:
+                print("\nCausal mask pattern:")
+                print(nopeak_mask[:5, :5])
+            
             attn_scores = attn_scores.masked_fill(~nopeak_mask, float('-inf'))
-            # padding_mask = mask.unsqueeze(1)  # [batch, 1, 1, seq_len]
-            # padding_mask = padding_mask.expand(-1, -1, attn_scores.size(-2), -1)  # [batch, 1, seq_len, seq_len]
             
-            # # Debug prints
-            # print("Attention scores shape:", attn_scores.shape)
-            # print("Padding mask shape:", padding_mask.shape)
-            # print("Sample from padding mask:", padding_mask[0, 0, :15, :15])  # Show first 5x5 elements
-            # print("Sample from attention scores (before masking):", attn_scores[0, 0, :15, :15])
-            
-            # # Apply padding mask
-            # attn_scores = attn_scores.masked_fill(~padding_mask, float(1e-9))
-            
-            # print("Sample from attention scores (after masking):", attn_scores[0, 0, :15, :15])
+            # Debug prints after masking
+            if self.store_attention_weights:
+                print("\nAttention scores after masking:")
+                print(attn_scores[0, 0, :5, :5])
         
         # Softmax is applied to obtain attention probabilities
         attn_probs = torch.softmax(attn_scores, dim=-1)
+        
+        # Store attention weights if in debug mode
+        if self.store_attention_weights:
+            self.last_attention_weights = attn_probs.detach()
+            print("\nAttention probabilities:")
+            print(attn_probs[0, 0, :5, :5])
         
         # Multiply by values to obtain the final output
         output = torch.matmul(attn_probs, V)
@@ -79,7 +88,7 @@ class MultiHeadAttention(nn.Module):
         
         # Perform scaled dot-product attention
         attn_output, attn_probs = self.scaled_dot_product_attention(query, key, value, mask)
-        self.attn_probs = attn_probs
+        
         # Combine heads and apply output transformation
         output = self.W_o(self.combine_heads(attn_output))
         return output, attn_probs
