@@ -22,8 +22,7 @@ function App() {
 
     setUploading(true)
     const formData = new FormData()
-    formData.append('image', selectedFile)
-    formData.append('text', 'sample text') // You can modify this as needed
+    formData.append('file', selectedFile)
 
     try {
       const response = await axios.post('http://localhost:8000/submit', formData, {
@@ -33,8 +32,13 @@ function App() {
       })
       setResult(JSON.stringify(response.data, null, 2))
     } catch (error) {
-      console.error('Error uploading file:', error)
-      setResult('Error uploading file')
+      if (axios.isAxiosError(error)) {
+        console.error('Error uploading file:', error.response?.data || error.message)
+        setResult(`Error: ${error.response?.data?.detail || error.message}`)
+      } else {
+        console.error('Error uploading file:', error)
+        setResult('Error uploading file')
+      }
     } finally {
       setUploading(false)
     }
@@ -42,7 +46,7 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Image Upload</h1>
+      <h1>Image Caption Generator</h1>
       <div className="upload-section">
         <input
           type="file"
@@ -55,7 +59,7 @@ function App() {
           disabled={!selectedFile || uploading}
           className="upload-button"
         >
-          {uploading ? 'Uploading...' : 'Upload'}
+          {uploading ? 'Generating Caption...' : 'Generate Caption'}
         </button>
       </div>
       {selectedFile && (
@@ -70,7 +74,7 @@ function App() {
       )}
       {result && (
         <div className="result">
-          <h3>Result:</h3>
+          <h3>Generated Caption:</h3>
           <pre>{result}</pre>
         </div>
       )}
