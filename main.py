@@ -17,25 +17,14 @@ torch.cuda.empty_cache()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataset = load_dataset("nlphuji/flickr30k")
-sample_size = 31000 if torch.cuda.is_available() else 10
+sample_size = 31000 if torch.cuda.is_available() else 2
 dataset = dataset['test'].select(range(sample_size))
 # .select(range(sample_size))
+# .select(range(sample_size))
 
-def make_square(image):
-    size = max(image.size)
-    new_image = ImageOps.pad(image, (size, size), color='white')
-    new_image = new_image.resize((224, 224))
-
-    return new_image
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.ColorJitter(
-        brightness=0.15,  # Slight brightness adjustment
-        contrast=0.15,    # Slight contrast adjustment
-        saturation=0.15,  # Slight saturation adjustment
-        hue=0.1        # Small hue shifts for temperature variation
-    ),
     transforms.ToTensor(),
     transforms.Normalize(
     mean=[0.485, 0.456, 0.406],
@@ -62,7 +51,7 @@ processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-pat
 tokenizer = processor.tokenizer
 tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
 vocab = tokenizer.get_vocab()  # Returns dict of {token: index}
-vocab_size = tokenizer.vocab_size
+vocab_size = tokenizer.vocab_size + 1
 reverse_vocab = {idx: token for token, idx in vocab.items()}
 
 clip_text_model = CLIP.text_model
@@ -93,18 +82,14 @@ feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
 
-decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size + 1, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
+decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
 
 
 
-decoder = Decoder(vocab_size + 1, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
+decoder = Decoder(vocab_size, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
 
 
-transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size + 1, pad_token=tokenizer.pad_token_id)
-
-
-
-
+transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size, pad_token=tokenizer.pad_token_id)
 
 
 
@@ -116,20 +101,55 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 
 
 
-batch_size = 80 if torch.cuda.is_available() else 2
-learning_rate = 0.001
+
+
+
+
+batch_size = 48 if torch.cuda.is_available() else 1
+learning_rate = 0.0005
 optimizer = torch.optim.Adam(transformer.parameters(), learning_rate)
 # scheduler = get_linear_schedule_with_warmup(
 #             optimizer,
 #             num_warmup_steps=1000,
 #             num_training_steps=total_steps
 #         )
-epochs = 13
+epochs = 10
 criterion = nn.CrossEntropyLoss(ignore_index=49408)
 
 dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 transformer.to(device)
+
+def create_position_weights(seq_length, device, alpha=0.1):
+    """
+    Creates weights that decay exponentially along the sequence.
+    alpha controls how quickly the weights decay (smaller alpha = slower decay)
+    """
+    positions = torch.arange(seq_length, device=device)
+    weights = torch.exp(-alpha * positions)
+    return weights / weights.mean()  # Normalize so average weight is 1
+
+# Modify the loss calculation in both train() and evaluate() functions
+def weighted_cross_entropy(output, target, seq_length, ignore_index):
+    # Reshape output and target
+    output_flat = output.reshape(-1, output.size(-1))
+    target_flat = target.reshape(-1)
+    
+    # Create position weights
+    position_weights = create_position_weights(seq_length, output.device, alpha=0.3)
+    # Repeat weights for each item in the batch
+    weights_flat = position_weights.repeat(output.size(0))
+    
+    # Calculate cross entropy for each element
+    loss = torch.nn.functional.cross_entropy(output_flat, target_flat, 
+                          ignore_index=ignore_index,
+                          reduction='none')
+    
+    # Apply position-based weights where target isn't padding
+    mask = (target_flat != ignore_index)
+    weighted_loss = (loss * weights_flat * mask).sum() / mask.sum()
+    
+    return weighted_loss
 
 def evaluate(transformer, val_loader):
     transformer.eval()
@@ -150,7 +170,7 @@ def evaluate(transformer, val_loader):
         true_indices = caption[:, 1:]
 
 
-        batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
+        batch_loss = weighted_cross_entropy(output, true_indices, true_indices.size(1), 49408)
         
         total_loss += batch_loss.item() 
         
@@ -190,8 +210,8 @@ def train(log_wandb=True):
             # output = output.reshape(-1, output.size(-1))  # Changed view to reshape
             # true_indices = true_indices.reshape(-1)  # Changed view to reshape and removed squeeze
 
-
-            batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
+            batch_loss = weighted_cross_entropy(output, true_indices, true_indices.size(1), 49408)
+            # batch_loss = criterion(output.reshape(-1, output.size(-1)), true_indices.reshape(-1))
             if log_wandb:
                 wandb.log({"batch_loss": batch_loss.item() })
             progress_bar.set_postfix({"batch_loss": batch_loss.item() })
