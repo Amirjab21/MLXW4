@@ -85,3 +85,12 @@
     transform: translateY(0);
   }
 }
+
+.word-swap {
+  display: inline-block;
+  transition: opacity 0.5s ease-in-out;
+}
+
+.word-swap.fade-out {
+  opacity: 0.7;
+}

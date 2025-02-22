@@ -69,6 +69,7 @@ train_dataset, val_dataset = torch.utils.data.random_split(
 
 
 d_model = 512
+hidden_dim = 2048
 text_dimension_embedding = 512
 image_encoder_output_dim = 768
 n_loops = 6
@@ -78,7 +79,7 @@ num_heads = 8
 self_attn_layer = MultiHeadAttention(encoder_output_dim=d_model, decoder_dim=d_model, d_model=d_model, num_heads=num_heads)
 cross_attn_layer = MultiHeadAttention(encoder_output_dim=image_encoder_output_dim, decoder_dim=text_dimension_embedding, d_model=d_model, num_heads=num_heads)
 
-feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048, d_model))
+feed_forward = nn.Sequential(nn.Linear(d_model, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, d_model))
 
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
@@ -121,78 +122,19 @@ dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 transformer.to(device)
 
-def create_position_weights(seq_length, device, alpha=0.1):
+def create_position_weights(seq_length, device, first_n=5, weight_factor=5.0):
     """
-    Creates weights that increase along the sequence.
-    alpha controls how quickly the weights increase (smaller alpha = slower increase)
+    Creates weights where the first n words have weight_factor times more weight than the remaining words.
+    Args:
+        seq_length: Length of the sequence
+        device: Device to create tensor on
+        first_n: Number of initial positions to give higher weight to
+        weight_factor: How much more weight to give to the first n positions
     """
-    # positions = torch.arange(seq_length, device=device)
-    # weights = torch.exp(alpha * positions)
-    positions = torch.arange(seq_length - 1, -1, -1, device=device)  # Reversed positions
-    weights = torch.exp(alpha * positions)
+    weights = torch.ones(seq_length, device=device)
+    weights[:first_n] = weight_factor
     normalized_weights = weights / weights.mean()  # Normalize so average weight is 1
     return normalized_weights
-
-def debug_transformer(transformer, image_batch, caption_batch, criterion):
-    """
-    Debug function to inspect transformer's behavior on individual examples
-    """
-    transformer.train()
-    batch_size = image_batch.size(0)
-    
-    # 1. Process input
-    print("\n=== Input Processing ===")
-    print(f"Image batch shape: {image_batch.shape}")
-    print(f"Caption batch shape: {caption_batch.shape}")
-    
-    # 2. Get transformer outputs with attention weights
-    captionwithoutend = caption_batch[:, :-1]
-    true_indices = caption_batch[:, 1:]
-    
-    # Enable attention weight collection
-    transformer.decoder.layer.self_attn_layer.store_attention_weights = True
-    transformer.decoder.layer.cross_attn_layer.store_attention_weights = True
-    
-    output = transformer(image_batch, captionwithoutend)
-    
-    # 3. Print attention patterns
-    print("\n=== Attention Patterns ===")
-    self_attention_weights = transformer.decoder.layer.self_attn_layer.last_attention_weights
-    cross_attention_weights = transformer.decoder.layer.cross_attn_layer.last_attention_weights
-    
-    print(f"Self-attention shape: {self_attention_weights.shape}")
-    print(f"Cross-attention shape: {cross_attention_weights.shape}")
-    
-    # 4. Print predictions vs actual
-    print("\n=== Predictions vs Actual ===")
-    output_probabilities = torch.softmax(output, dim=2)
-    predicted_indices = torch.argmax(output_probabilities, dim=2)
-    
-    for i in range(batch_size):
-        print(f"\nExample {i+1}:")
-        pred_words = [reverse_vocab[idx.item()] for idx in predicted_indices[i]]
-        true_words = [reverse_vocab[idx.item()] for idx in true_indices[i]]
-        print(f"Predicted: {' '.join(pred_words)}")
-        print(f"True: {' '.join(true_words)}")
-        
-        # Calculate per-token loss
-        example_output = output[i].unsqueeze(0)
-        example_target = true_indices[i].unsqueeze(0)
-        token_losses = torch.nn.functional.cross_entropy(
-            example_output.view(-1, output.size(-1)),
-            example_target.view(-1),
-            ignore_index=49408,
-            reduction='none'
-        )
-        print(f"Token-wise losses: {token_losses}")
-        
-        # Print attention visualization for first head
-        print("\nSelf-attention first head (first 5 tokens):")
-        print(self_attention_weights[i, 0, :5, :5])
-        print("\nCross-attention first head (first 5 tokens):")
-        print(cross_attention_weights[i, 0, :5, :5])
-    
-    return output, self_attention_weights, cross_attention_weights
 
 # Modify the loss calculation in both train() and evaluate() functions
 def weighted_cross_entropy(output, target, seq_length, ignore_index):
@@ -201,7 +143,7 @@ def weighted_cross_entropy(output, target, seq_length, ignore_index):
     target_flat = target.reshape(-1)
     
     # Create position weights
-    position_weights = create_position_weights(seq_length, output.device, alpha=0.1)
+    position_weights = create_position_weights(seq_length, output.device, first_n=7, weight_factor=4.0)
     # Repeat weights for each item in the batch
     weights_flat = position_weights.repeat(output.size(0))
     
@@ -213,6 +155,12 @@ def weighted_cross_entropy(output, target, seq_length, ignore_index):
     # Apply position-based weights where target isn't padding
     mask = (target_flat != ignore_index)
     weighted_loss = (loss * weights_flat * mask).sum() / mask.sum()
+
+    # print(f"\nFirst element unweighted loss: {loss[0].item():.4f}")
+    # print(f"Batch weighted loss: {loss[0] * weights_flat[0] * mask[0] .item():.4f}")
+
+    # print(f"\fifth element unweighted loss: {loss[6].item():.4f}")
+    # print(f"Batch weighted loss: {loss[6] * weights_flat[6] * mask[6] .item():.4f}")
 
     
     return weighted_loss

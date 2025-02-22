@@ -64,7 +64,10 @@ function App() {
   return (
     <div style={{display: 'flex', flexDirection: 'row'}}>
       <div className="container">
-        <h1>Image Caption Generator</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h1>Random Caption Generator</h1>
+          <span style={{ fontSize: '0.9rem', color: '#666' }}>Now recognises man in blue shirt</span>
+        </div>
         <div className="upload-section">
           <input
             type="file"

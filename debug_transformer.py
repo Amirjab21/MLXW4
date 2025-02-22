@@ -153,10 +153,55 @@ def debug_example(transformer, example_idx, dataset):
         reduction='none'
     )
     token_losses = token_losses.view(true_indices.shape)
+
+    def weighted_cross_entropy(output, target, seq_length, ignore_index):
+        # Reshape output and target
+        output_flat = output.reshape(-1, output.size(-1))
+        target_flat = target.reshape(-1)
+        
+        # Create position weights
+        position_weights = create_position_weights(seq_length, output.device, first_n=5, weight_factor=5.0)
+        # Repeat weights for each item in the batch
+        weights_flat = position_weights.repeat(output.size(0))
+        
+        # Calculate cross entropy for each element
+        loss = torch.nn.functional.cross_entropy(output_flat, target_flat, 
+                            ignore_index=ignore_index,
+                            reduction='none')
+        
+        # Apply position-based weights where target isn't padding
+        mask = (target_flat != ignore_index)
+        weighted_loss = (loss * weights_flat * mask).sum() / mask.sum()
+
+        
+        return weighted_loss
+
+    def create_position_weights(seq_length, device, first_n=5, weight_factor=5.0):
+        """
+        Creates weights where the first n words have weight_factor times more weight than the remaining words.
+        Args:
+            seq_length: Length of the sequence
+            device: Device to create tensor on
+            first_n: Number of initial positions to give higher weight to
+            weight_factor: How much more weight to give to the first n positions
+        """
+        weights = torch.ones(seq_length, device=device)
+        weights[:first_n] = weight_factor
+        normalized_weights = weights / weights.mean()  # Normalize so average weight is 1
+        return normalized_weights
     
-    print("\nPer-token losses:")
-    for i, (word, loss) in enumerate(zip(true_words, token_losses[0])):
-        print(f"{word}: {loss.item():.4f}")
+    # position_weights = create_position_weights(captionwithoutend.size(1), device, first_n=5, weight_factor=5.0)
+
+    # batch_loss = weighted_cross_entropy(output, true_indices, true_indices.size(1), tokenizer.pad_token_id)
+    
+    position_weights = create_position_weights(true_indices.size(1), device, first_n=5, weight_factor=5.0)
+    token_losses_weighted = token_losses[0] * position_weights
+    
+    
+    print(f"\nTotal weighted loss: {token_losses_weighted.mean().item():.4f}")
+    print("\nPer-token losses (weighted):")
+    for i, (word, loss, weighted_loss) in enumerate(zip(true_words, token_losses[0], token_losses_weighted)):
+        print(f"{word}: raw={loss.item():.4f}, weight={position_weights[i]:.1f}, weighted={weighted_loss.item():.4f}")
     
     # Plot attention patterns for each layer
     print("\nPlotting attention patterns...")

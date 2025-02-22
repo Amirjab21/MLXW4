@@ -77,7 +77,7 @@ transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_enc
 dataset = Flickr30kDataset(transformed_images, tokenizer)
 
 # data = __getitem__(0, transformed_images)
-checkpoint = torch.load("checkpoints/best_model.pt", map_location=torch.device("cpu"))
+checkpoint = torch.load("checkpoints/best_model_2.pt", map_location=torch.device("cpu"))
 transformer.load_state_dict(checkpoint['model_state_dict'])
 
 def evaluate(transformer, data):
@@ -119,7 +119,7 @@ def evaluate(transformer, data):
                           if token not in ['<|endoftext|>', '<<<PAD>>>'])
     return cleaned_text
 
-batch_size = 3
+batch_size = 1
 val_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=6 if torch.cuda.is_available() else 0, pin_memory=True)
 optimizer = torch.optim.Adam(transformer.parameters(), lr=0.0001)
 

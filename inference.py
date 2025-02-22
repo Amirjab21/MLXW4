@@ -47,6 +47,7 @@ tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
 vocab = tokenizer.get_vocab()  # Returns dict of {token: index}
 tokenizer = processor.tokenizer
 vocab_size = tokenizer.vocab_size
+vocab_size_final = vocab_size + 1 #add 1 here
 print("second vocab size", vocab_size)
 reverse_vocab = {idx: token for token, idx in vocab.items()}
 
@@ -67,14 +68,14 @@ feed_forward = nn.Sequential(nn.Linear(d_model, 2048), nn.ReLU(), nn.Linear(2048
 text_model = CLIP.text_model
 text_embedder = text_model.embeddings
 
-decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size + 1, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
+decoder_layer = DecoderLayer(input_dim=text_dimension_embedding, tgt_vocab_size=vocab_size_final, intermediate_attn_dim=d_model, n_loops=n_loops, feed_forward=feed_forward, self_attn_layer=self_attn_layer, cross_attn_layer=cross_attn_layer)
 
 
 
-decoder = Decoder(vocab_size + 1, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
-transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size + 1, pad_token=tokenizer.pad_token_id)
+decoder = Decoder(vocab_size_final, pad_token=tokenizer.pad_token_id, embedding_layer=text_embedder, layer=decoder_layer, n_loops=n_loops,d_model=d_model)
+transformer = Transformer(d_model=d_model, text_encoder=text_embedder, image_encoder=CLIP.vision_model, decoder=decoder, tgt_vocab_size=vocab_size_final, pad_token=tokenizer.pad_token_id)
 
-def __getitem__(idx, dataset):
+def __getitem__(idx, dataset, vocab_size):
     dataset = dataset[idx]
     original_image = dataset['image']
     image = transform(dataset['image']) #height, width, channels
@@ -86,10 +87,11 @@ def __getitem__(idx, dataset):
     tokenized_caption = tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
     input_ids = tokenized_caption['input_ids']
 
-    eos_positions = (input_ids == tokenizer.eos_token_id).nonzero()
-    if len(eos_positions) > 0:
-        first_eos_pos = eos_positions[0][1]
-        input_ids[0, first_eos_pos+1:] = 49408
+    if vocab_size == 49409:
+        eos_positions = (input_ids == tokenizer.eos_token_id).nonzero()
+        if len(eos_positions) > 0:
+            first_eos_pos = eos_positions[0][1]
+            input_ids[0, first_eos_pos+1:] = 49408
 
     tokenized_caption['input_ids'] = input_ids
             
@@ -101,7 +103,7 @@ def __getitem__(idx, dataset):
     }
 
 # data = __getitem__(0, transformed_images)
-checkpoint = torch.load("checkpoints/best_model.pt", map_location=torch.device("cpu"))
+checkpoint = torch.load("checkpoints/best_model_1434.pt", map_location=torch.device("cpu"))
 transformer.load_state_dict(checkpoint['model_state_dict'])
 
 def evaluate(transformer, data, temperature):
@@ -148,7 +150,7 @@ def evaluate(transformer, data, temperature):
 # for i in range(10):
 # evaluate(transformer, __getitem__(20, transformed_images))
 def evaluate_topk(transformer, data, k):
-    transformer.train()
+    transformer.eval()
     MAX_SEQ_LENGTH = 35
     START_TOKEN_ID = 49406
     # PAD_TOKEN_ID = 49408
@@ -203,11 +205,11 @@ def evaluate_topk(transformer, data, k):
 
 
 
-def newest(image_path=None):
+def newest(id=108,image_path=None):
     model = transformers.CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-    item = __getitem__(108, transformed_images)
+    item = __getitem__(id, transformed_images, vocab_size_final)
     # Load the single image
     if image_path is not None:
         from PIL import Image
@@ -280,4 +282,4 @@ def newest_temperature(image_path=None):
     plt.axis('off')
     plt.show()
 
-newest('man.jpg')
+newest(111)
