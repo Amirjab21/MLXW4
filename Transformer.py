@@ -8,8 +8,9 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-        self.text_encoder = text_encoder
-        self.image_encoder = image_encoder
+        for param in self.clip.parameters():
+            param.requires_grad = False
+
         self.decoder = decoder
         self.text_embedding = nn.Embedding(tgt_vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, dropout)
@@ -17,40 +18,71 @@ class Transformer(nn.Module):
         self.fc = nn.Linear(d_model, tgt_vocab_size)
 
     def forward(self, image, caption):
-        final_mask, padding_mask = self.generate_padding_mask(caption)
-        # text_embeddings = self.text_encoder(caption)
-        image_encoder_output = self.clip.get_image_features(image)
-        # print(image_encoder_output, "image_encoder_output")
-        text_embeddings = self.text_embedding(caption)
+        # Get image features and reshape for concatenation
+        image_features = self.clip.get_image_features(image).unsqueeze(1)  # [batch_size, 1, feature_dim]
         
-        sequence = torch.cat((image_encoder_output.unsqueeze(1), text_embeddings), dim=1)
+        # Get text embeddings
+        text_embeddings = self.text_embedding(caption)  # [batch_size, seq_len, d_model]
+        
+        # Concatenate image features with text embeddings
+        sequence = torch.cat((image_features, text_embeddings), dim=1)
+        
+        # Add positional encoding
         sequence = self.positional_encoding(sequence)
-        dec_output = self.decoder.forward(sequence, final_mask)
-        output = self.fc(dec_output[:,1:])
+        
+        # Generate mask
+        mask = self.generate_padding_mask(caption)
+        
+        # Pass through decoder
+        dec_output = self.decoder(sequence, mask)
+        
+        # Remove CLS token and project to vocabulary
+        output = self.fc(dec_output[:, 1:])
         return output
     
     def generate_padding_mask(self, caption):
         """
         Generate combined padding and causal mask for decoder self-attention.
-        Args:
-            caption: Input caption tensor of shape (batch_size, seq_len, vocab_size)
-        Returns:
-            Attention mask of shape (batch_size, seq_len, seq_len) where:
-            - pad tokens are masked with 0
-            - future tokens are masked with 0 (causal masking)
-            - valid tokens are marked with 1
+        The first token (CLS/image token) can be attended to by all tokens.
+        All other tokens can only attend to previous tokens and the CLS token.
         """
-        # print(caption.shape, "CAPTION", caption.squeeze(1).shape)
-        padding_mask = (caption != self.pad_token).bool()  # [batch_size, seq_len]
-        # print(padding_mask.shape, "PADDING MASK")
-        padding_mask = torch.cat([torch.ones(padding_mask.shape[0], 1, device=padding_mask.device, dtype=torch.bool), padding_mask], dim=1)
-        # Each item in the batch gets its own mask because:
-        # 1. padding_mask is [batch_size, seq_len]
-        # 2. When we do the unsqueeze operations, we maintain the batch dimension:
-        padding_mask_self = padding_mask.unsqueeze(1) * padding_mask.unsqueeze(2)
-        final_mask = padding_mask_self
-        # print(final_mask, "final_mask")
-        return final_mask, padding_mask
+        batch_size, seq_length = caption.shape
+        total_length = seq_length + 1  # Add 1 for CLS token
+        
+        # Create causal mask (can attend to self and previous tokens)
+        causal_mask = torch.triu(torch.ones(total_length, total_length), diagonal=1).bool()
+        
+        # Modify first column of causal mask to allow all tokens to attend to CLS token
+        causal_mask[:, 0] = False
+        
+        # Move to correct device
+        causal_mask = causal_mask.to(caption.device)
+        
+        # Create padding mask that includes CLS token
+        padding_mask = torch.ones(batch_size, total_length, device=caption.device).bool()
+        # Set the padding mask for all tokens after CLS
+        padding_mask[:, 1:] = (caption != self.pad_token)
+        false_indices = []
+        for i in range(batch_size):
+            # Find the first False position in this batch item's padding mask
+            false_pos = (padding_mask[i] == False).nonzero()
+            # If no padding token found, use the sequence length
+            false_idx = false_pos[0].item() if len(false_pos) > 0 else total_length
+            false_indices.append(false_idx)
+        
+        # Expand padding mask for broadcasting
+        padding_mask = padding_mask.unsqueeze(1).expand(batch_size, total_length, total_length)
+        
+        # Create a copy and set all positions after each example's false_index to False
+        cloned = torch.clone(padding_mask)
+        for i in range(batch_size):
+            cloned[i, false_indices[i]:, :] = False  # Set rows after false_index to False
+            cloned[i, :, false_indices[i]:] = False  # Set columns after false_index to False
+        # print(cloned, "cloned")
+        # Combine masks: allow attention where causal_mask is False AND padding_mask is True
+        final_mask = ~causal_mask & cloned
+        
+        return final_mask
 
 def clones(module, N):
     "Produce N identical layers."
@@ -67,23 +99,28 @@ class DecoderLayer(nn.Module):
         self.n_loops = n_loops
         self.dropout1 = nn.Dropout(0.1)
         self.dropout2 = nn.Dropout(0.1)
+        self.dropout3 = nn.Dropout(0.1)
         
-        # self.projectbacktovocab = torch.nn.Linear(intermediate_attn_dim, tgt_vocab_size)
-
         self.norm1 = torch.nn.LayerNorm(input_dim)
         self.norm2 = torch.nn.LayerNorm(input_dim)
         self.norm3 = torch.nn.LayerNorm(input_dim)
 
     def forward(self, x, encoder_output, mask):
-        embedding = x
-        attn, prob = self.self_attn_layer.forward(embedding, embedding, embedding, mask)
-        attn = self.dropout1(attn)
-        x = self.norm1(attn + embedding)
-        # attn, prob = self.cross_attn_layer.forward(query_input=x, key_input=encoder_output, value_input=encoder_output, mask=None)
-        # x = self.norm2(x + attn)
+        # Self attention
+        attn1, _ = self.self_attn_layer(x, x, x, mask)
+        attn1 = self.dropout1(attn1)
+        x = self.norm1(attn1 + x)
+        
+        # Cross attention with image features
+        # attn2, _ = self.cross_attn_layer(x, encoder_output, encoder_output)
+        # attn2 = self.dropout2(attn2)
+        # x = self.norm2(attn2 + x)
+        
+        # Feed forward
         ff_output = self.FF_layer(x)
-        ff_output = self.dropout2(ff_output)
+        ff_output = self.dropout3(ff_output)
         x = self.norm3(x + ff_output)
+        
         return x
 
 class Decoder(nn.Module):
@@ -108,33 +145,7 @@ class Decoder(nn.Module):
         x = self.norm1(x)
         return x
      
-     def generate_padding_mask(self, caption):
-        """
-        Generate combined padding and causal mask for decoder self-attention.
-        Args:
-            caption: Input caption tensor of shape (batch_size, seq_len, vocab_size)
-        Returns:
-            Attention mask of shape (batch_size, seq_len, seq_len) where:
-            - pad tokens are masked with 0
-            - future tokens are masked with 0 (causal masking)
-            - valid tokens are marked with 1
-        """
-        # batch_size, seq_length, _ = caption.shape
-        
-        # Get padding mask by checking if the last index (pad token) is 1
-        padding_mask = (caption.squeeze(1) != self.pad_token).bool()  # [batch_size, seq_len]
-        # Each item in the batch gets its own mask because:
-        # 1. padding_mask is [batch_size, seq_len]
-        # 2. When we do the unsqueeze operations, we maintain the batch dimension:
-        padding_mask_self = padding_mask.unsqueeze(1) * padding_mask.unsqueeze(2)
-        # Create final mask by combining padding and causal masks
-        final_mask = padding_mask_self
-        cross_attn_mask = padding_mask
-        # Create final mask by combining padding and causal masks
-        
-        return final_mask, cross_attn_mask
-     
-   
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super().__init__()
