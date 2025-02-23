@@ -42,13 +42,12 @@ processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-pat
 
 tokenizer = processor.tokenizer
 vocab_size = tokenizer.vocab_size
-print("first vocab size", vocab_size)
+print("vocab size", vocab_size)
 tokenizer.add_special_tokens({"pad_token": "<<<PAD>>>"})
 vocab = tokenizer.get_vocab()  # Returns dict of {token: index}
 tokenizer = processor.tokenizer
 vocab_size = tokenizer.vocab_size
 vocab_size_final = vocab_size + 1 #add 1 here
-print("second vocab size", vocab_size)
 reverse_vocab = {idx: token for token, idx in vocab.items()}
 
 clip_text_model = CLIP.text_model
@@ -103,7 +102,7 @@ def __getitem__(idx, dataset, vocab_size):
     }
 
 # data = __getitem__(0, transformed_images)
-checkpoint = torch.load("checkpoints/best_model_1434.pt", map_location=torch.device("cpu"))
+checkpoint = torch.load("checkpoints/best_model_sat.pt", map_location=torch.device("cpu"))
 transformer.load_state_dict(checkpoint['model_state_dict'])
 
 def evaluate(transformer, data, temperature):
@@ -149,7 +148,7 @@ def evaluate(transformer, data, temperature):
     
 # for i in range(10):
 # evaluate(transformer, __getitem__(20, transformed_images))
-def evaluate_topk(transformer, data, k):
+def evaluate_topk(transformer, data, k, temperature):
     transformer.eval()
     MAX_SEQ_LENGTH = 35
     START_TOKEN_ID = 49406
@@ -161,7 +160,13 @@ def evaluate_topk(transformer, data, k):
     predicted_indices_list = []
     
     # Generate first token with beam search
+    # print(data['image'].unsqueeze(0).repeat(BEAM_WIDTH, 1, 1, 1), "dataimage" )
     output = transformer.forward(data['image'].unsqueeze(0).repeat(BEAM_WIDTH, 1, 1, 1), current_sequences)
+    logits = output / temperature
+    output_probabilities = torch.softmax(logits, dim=2)
+    
+    # Sample BEAM_WIDTH tokens using multinomial
+    first_tokens = torch.multinomial(output_probabilities[0, 0], num_samples=BEAM_WIDTH)
     output_probabilities = torch.softmax(output, dim=2)
     top_k_values, top_k_indices = torch.topk(output_probabilities[0, 0], k=BEAM_WIDTH)
     
@@ -170,8 +175,8 @@ def evaluate_topk(transformer, data, k):
         current_sequence = torch.full((1, 1), START_TOKEN_ID)
         predicted_indices = torch.zeros((1, 1))
         
-        # Use the beam_idx-th best first token
-        first_token = top_k_indices[beam_idx].item()
+        # Use the sampled first token
+        first_token = first_tokens[beam_idx].item()
         current_sequence = torch.cat((current_sequence, torch.tensor([first_token]).unsqueeze(0)), dim=1)
         predicted_indices[0, 0] = first_token
         
@@ -179,8 +184,8 @@ def evaluate_topk(transformer, data, k):
         for pos in range(1, MAX_SEQ_LENGTH):
             output = transformer.forward(data['image'].unsqueeze(0), current_sequence)
             output_probabilities = torch.softmax(output, dim=2)
-            predicted_digit = torch.argmax(output_probabilities[0, pos])
-            
+            predicted_digit = torch.argmax(output_probabilities[0, -1])
+            are_equal = torch.allclose(output_probabilities[0, pos], output_probabilities[0, -1])
             if pos < MAX_SEQ_LENGTH - 1:
                 current_sequence = torch.cat((current_sequence, torch.tensor([predicted_digit.item()]).unsqueeze(0)), dim=1)
             
@@ -205,7 +210,7 @@ def evaluate_topk(transformer, data, k):
 
 
 
-def newest(id=108,image_path=None):
+def newest(id=108,image_path=None, temperature=2, k=3):
     model = transformers.CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
@@ -218,10 +223,9 @@ def newest(id=108,image_path=None):
         image = item['original_image']
 
     # List of captions (5 captions)
-    captions = evaluate_topk(transformer, item, 5)
+    captions = evaluate_topk(transformer, item, k, temperature)
 
-    # Preprocess the image and captions
-    inputs = processor(text=captions, images=image, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
+    inputs = processor(text=captions, images=image, return_tensors="pt", padding="max_length", max_length=45, truncation=True)
 
     # Get the model's output
     with torch.no_grad():
@@ -247,39 +251,181 @@ def newest(id=108,image_path=None):
 
 # newest("twogirls.jpg")
 
-def newest_temperature(image_path=None):
-    model = transformers.CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = transformers.CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-    item = __getitem__(101, transformed_images)
-    # Load the single image
-    if image_path is not None:
-        from PIL import Image
-        image = Image.open(image_path)
-    else:
-        image = item['original_image']
 
-    # Generate captions with different temperatures
-    temperatures = [0.5, 0.7, 0.9, 1.5, 2, 3]
-    captions = [evaluate(transformer, item, temp) for temp in temperatures]
-    print(captions, "captions")
+def generate_padding_mask(caption, pad_token):
+    """
+    Generate combined padding and causal mask for decoder self-attention.
+    The first token (CLS/image token) can be attended to by all tokens.
+    All other tokens can only attend to previous tokens and the CLS token.
+    """
+    batch_size, seq_length = caption.shape
+    total_length = seq_length + 1  # Add 1 for CLS token
+    
+    # Create causal mask (can attend to self and previous tokens)
+    causal_mask = torch.triu(torch.ones(total_length, total_length), diagonal=1).bool()
+    
+    # Modify first column of causal mask to allow all tokens to attend to CLS token
+    causal_mask[:, 0] = False
+    
+    # Move to correct device
+    causal_mask = causal_mask.to(caption.device)
+    
+    # Create padding mask that includes CLS token
+    padding_mask = torch.ones(batch_size, total_length, device=caption.device).bool()
+    # Set the padding mask for all tokens after CLS
+    padding_mask[:, 1:] = (caption != pad_token)
+    false_indices = []
+    for i in range(batch_size):
+        # Find the first False position in this batch item's padding mask
+        false_pos = (padding_mask[i] == False).nonzero()
+        # If no padding token found, use the sequence length
+        false_idx = false_pos[0].item() if len(false_pos) > 0 else total_length
+        false_indices.append(false_idx)
+    
+    # Expand padding mask for broadcasting
+    padding_mask = padding_mask.unsqueeze(1).expand(batch_size, total_length, total_length)
+    
+    # Create a copy and set all positions after each example's false_index to False
+    cloned = torch.clone(padding_mask)
+    for i in range(batch_size):
+        cloned[i, false_indices[i]:, :] = False  # Set rows after false_index to False
+        cloned[i, :, false_indices[i]:] = False  # Set columns after false_index to False
+    # print(cloned, "cloned")
+    # Combine masks: allow attention where causal_mask is False AND padding_mask is True
+    final_mask = ~causal_mask & cloned
+    
+    return final_mask
 
-    # Rest of the function remains the same
-    inputs = processor(text=captions, images=image, return_tensors="pt", padding="max_length", max_length=35, truncation=True)
-
+def generate_caption(
+    model,
+    image: torch.Tensor,
+    max_length: int = 30,
+    temperature: float = 0.7,
+    top_k: int = 50,
+    top_p: float = 0.9,
+    min_length: int = 5,
+    repetition_penalty: float = 1.2,
+    length_penalty: float = 1.0
+):
+    """Generate a caption for the image using nucleus sampling."""
+    model.eval()
+    device = next(model.parameters()).device
+    
     with torch.no_grad():
-        outputs = model(**inputs)
+        # print(image.shape, "image")
+        # Get image features
+        image_features = model.clip.get_image_features(image['image'].unsqueeze(0))
+        
+        # Initialize caption with start token
+        caption = torch.tensor([[model.tokenizer.bos_token_id]], device=device)
+        
+        # Keep track of generated tokens for repetition penalty
+        generated_tokens = set()
+        
+        # Generate tokens one by one
+        for _ in range(max_length):
+            # Get text embeddings for current caption
+            text_embeddings = model.text_embedding(caption)
+            
+            # Combine with image features
+            sequence = torch.cat([
+                image_features.unsqueeze(1),
+                text_embeddings
+            ], dim=1)
+            
+            # Add positional encoding
+            sequence = model.positional_encoding(sequence)
+            
+            # Create causal mask
+            seq_length = sequence.size(1)
+            # causal_mask = torch.triu(
+            #     torch.ones(seq_length, seq_length, device=device) * float('-inf'),
+            #     diagonal=1
+            # )
+            # print(caption, "caption")
+            mask = generate_padding_mask(caption, 49408)
+            
+            # Get decoder output
+            decoder_output = model.decoder(sequence, mask=mask)
+            
+            # Get next token logits
+            next_token_logits = model.fc(decoder_output[:, -1, :])
+            
+            # Apply temperature
+            next_token_logits = next_token_logits / temperature
+            
+            # Apply repetition penalty
+            for token_id in generated_tokens:
+                next_token_logits[0, token_id] /= repetition_penalty
+            
+            # Apply length penalty
+            if caption.size(1) > min_length:
+                next_token_logits = next_token_logits / (caption.size(1) ** length_penalty)
+            
+            # Apply top-k filtering
+            if top_k > 0:
+                indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
+                next_token_logits[indices_to_remove] = float('-inf')
+            
+            # Apply top-p (nucleus) filtering
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                
+                # Remove tokens with cumulative probability above the threshold
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                
+                indices_to_remove = sorted_indices_to_remove.scatter(
+                    dim=1,
+                    index=sorted_indices,
+                    src=sorted_indices_to_remove
+                )
+                next_token_logits[indices_to_remove] = float('-inf')
+            
+            # Sample next token
+            probs = torch.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            
+            # Add to generated tokens set
+            generated_tokens.add(next_token.item())
+            
+            # Append next token to caption
+            caption = torch.cat([caption, next_token], dim=1)
+            
+            # Stop if we generate end token or period
+            if (next_token.item() == model.tokenizer.eos_token_id or 
+                next_token.item() == model.tokenizer.encode('.')[0]):
+                break
+    
+    # Decode caption and clean up
+    caption = model.tokenizer.decode(caption[0], skip_special_tokens=True)
+    print(caption, "caption")
 
-    logits_per_caption = outputs.logits_per_text
-    print(logits_per_caption, "logits_per_caption")
-
-    best_caption_idx = torch.argmax(logits_per_caption).item()
-    print(f"The best matching caption is: {captions[best_caption_idx]}")
-    best_caption = captions[best_caption_idx]
-
-    plt.imshow(image)
-    plt.title(best_caption, wrap=True, pad=15)
+    # Clean up the caption
+    caption = caption.strip()
+    if not caption.endswith('.'):
+        caption += '.'
+    
+    # Remove any trailing fragments after the last period
+    last_period = caption.rfind('.')
+    if last_period > 0:
+        caption = caption[:last_period + 1]
+    
+    plt.figure(figsize=(10, 8))
+    plt.imshow(image['original_image'])
+    plt.title(caption, wrap=True, pad=15)
     plt.axis('off')
     plt.show()
+    
+    return caption
 
-newest(111)
+try:
+    while True:
+        image_id = torch.randint(0, len(transformed_images), (1,)).item()
+        generate_caption(transformer, __getitem__(image_id, transformed_images, vocab_size_final), max_length=45)
+        newest(image_id, None, temperature=1, k=1)
+except KeyboardInterrupt:
+    print("\nStopped by user")
