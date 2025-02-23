@@ -102,7 +102,7 @@ def __getitem__(idx, dataset, vocab_size):
     }
 
 # data = __getitem__(0, transformed_images)
-checkpoint = torch.load("checkpoints/best_model_sat.pt", map_location=torch.device("cpu"))
+checkpoint = torch.load("checkpoints/best_model_sun.pt", map_location=torch.device("cpu"))
 transformer.load_state_dict(checkpoint['model_state_dict'])
 
 def evaluate(transformer, data, temperature):
@@ -158,7 +158,7 @@ def evaluate_topk(transformer, data, k, temperature):
     # Initialize beam with start token
     current_sequences = torch.full((BEAM_WIDTH, 1), START_TOKEN_ID)
     predicted_indices_list = []
-    
+    transformer.eval()
     # Generate first token with beam search
     # print(data['image'].unsqueeze(0).repeat(BEAM_WIDTH, 1, 1, 1), "dataimage" )
     output = transformer.forward(data['image'].unsqueeze(0).repeat(BEAM_WIDTH, 1, 1, 1), current_sequences)
@@ -185,7 +185,8 @@ def evaluate_topk(transformer, data, k, temperature):
             output = transformer.forward(data['image'].unsqueeze(0), current_sequence)
             output_probabilities = torch.softmax(output, dim=2)
             predicted_digit = torch.argmax(output_probabilities[0, -1])
-            are_equal = torch.allclose(output_probabilities[0, pos], output_probabilities[0, -1])
+            if predicted_digit.item() in [tokenizer.eos_token_id, tokenizer.pad_token_id]:
+                break
             if pos < MAX_SEQ_LENGTH - 1:
                 current_sequence = torch.cat((current_sequence, torch.tensor([predicted_digit.item()]).unsqueeze(0)), dim=1)
             
@@ -422,10 +423,11 @@ def generate_caption(
     
     return caption
 
-try:
-    while True:
-        image_id = torch.randint(0, len(transformed_images), (1,)).item()
-        generate_caption(transformer, __getitem__(image_id, transformed_images, vocab_size_final), max_length=45)
-        newest(image_id, None, temperature=1, k=1)
-except KeyboardInterrupt:
-    print("\nStopped by user")
+if __name__ == "__main__":
+    try:
+        while True:  # Infinite loop
+            # Generate random image ID from the dataset
+            random_id = torch.randint(0, len(transformed_images), (1,)).item()
+            newest(id=random_id, temperature=1.5)  # Test with random image
+    except KeyboardInterrupt:
+        print("\nTest stopped by user")
