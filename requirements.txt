@@ -1,0 +1,14 @@
+tqdm
+transformers
+torch
+torchvision
+numpy
+pillow
+tokenizers
+streamlit
+matplotlib
+datasets
+pandas
+nltk
+sentencepiece
+wandb
