@@ -8,8 +8,9 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-        self.text_encoder = text_encoder
-        self.image_encoder = image_encoder
+        for param in self.clip.parameters():
+            param.requires_grad = False
+
         self.decoder = decoder
         self.text_embedding = nn.Embedding(tgt_vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, dropout)

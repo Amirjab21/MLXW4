@@ -28,29 +28,37 @@ class Flickr30kDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         dataset = self.dataset[idx]
         image = transform(dataset['image']) #height, width, channels
-        captions = dataset['caption']
-        random_caption_idx = torch.randint(0, len(captions), (1,)).item()
-        selected_caption = captions[random_caption_idx]
+        all_captions = dataset['caption']
+        number_of_captions = len(all_captions)
 
-        tokenized_caption = self.tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=45, truncation=True)
-        input_ids = tokenized_caption['input_ids']
+        tokenized = self.tokenizer(
+            all_captions,
+            padding='max_length',
+            truncation=True,
+            max_length=45,
+            return_tensors="pt",
+            pad_to_max_length=True  # Ensure consistent padding
+            )
+        tokenized_captions = tokenized.input_ids
+        # random_caption_idx = torch.randint(0, len(captions), (1,)).item()
+        # selected_caption = captions[random_caption_idx]
 
-        eos_positions = (input_ids == self.tokenizer.eos_token_id).nonzero()
-        if len(eos_positions) > 0:
-            first_eos_pos = eos_positions[0][1]
-            
-            # Replace all padding tokens after the first EOS with 49408 (<<<PAD>>>)
-            # Keep one EOS token (49407) at the first EOS position
-            input_ids[0, first_eos_pos+1:] = 49408
-
-        tokenized_caption['input_ids'] = input_ids
+        # tokenized_caption = self.tokenizer(selected_caption, return_tensors="pt", padding="max_length", max_length=45, truncation=True)
+        # input_ids = tokenized_captions['input_ids']
+        eos_positions = (tokenized_captions == self.tokenizer.eos_token_id).nonzero()
+        # Group EOS positions by caption (row)
+        for i in range(len(all_captions)):
+            caption_eos = eos_positions[eos_positions[:, 0] == i]
+            if len(caption_eos) > 0:
+                first_eos_pos = caption_eos[0][1]
+                # Replace all tokens after the first EOS with PAD token (49408)
+                tokenized_captions[i, first_eos_pos+1:] = 49408
 
 
         
-
     
         return {
-            'image': image,
-            'caption': tokenized_caption['input_ids'].squeeze(0),
+            'images': image,
+            'captions': tokenized_captions,
         }
     
